@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoomCraft - Premium 2D/3D Raumplaner</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- CSS stylesheet -->
+    <link rel="stylesheet" href="style.css?v=1.0.5">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Three.js and OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon"></div>
+                    <h1>RoomCraft</h1>
+                </div>
+                <span class="badge">v1.0.5</span>
+            </div>
+
+            <!-- Navigation Tabs -->
+            <nav class="sidebar-tabs">
+                <button class="tab-btn active" data-tab="tab-room" title="Raum & Schrägen">
+                    <i data-lucide="home"></i>
+                    <span>Raum</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-elements" title="Türen & Fenster">
+                    <i data-lucide="layout"></i>
+                    <span>Elemente</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-installations" title="Elektrik & Anschlüsse">
+                    <i data-lucide="zap"></i>
+                    <span>Anschlüsse</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-furniture" title="Möbel platzieren">
+                    <i data-lucide="armchair"></i>
+                    <span>Möbel</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-content">
+                <!-- Tab: Room Settings -->
+                <div class="tab-panel active" id="tab-room">
+                    <h2>Raum-Dimensionen</h2>
+                    
+                    <div class="input-group">
+                        <label for="room-width">Breite (cm)</label>
+                        <div class="slider-input">
+                            <input type="range" id="room-width-range" min="200" max="1000" value="500" step="10">
+                            <input type="number" id="room-width" min="200" max="1000" value="500" class="num-input">
+                        </div>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="room-depth">Tiefe / Länge (cm)</label>
+                        <div class="slider-input">
+                            <input type="range" id="room-depth-range" min="200" max="1000" value="400" step="10">
+                            <input type="number" id="room-depth" min="200" max="1000" value="400" class="num-input">
+                        </div>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="room-height">Standardhöhe (cm)</label>
+                        <div class="slider-input">
+                            <input type="range" id="room-height-range" min="200" max="400" value="250" step="5">
+                            <input type="number" id="room-height" min="200" max="400" value="250" class="num-input">
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <h2>Dachschrägen</h2>
+                    <p class="section-desc">Legen Sie individuelle Schrägen für die Wände fest.</p>
+                    
+                    <div class="pitch-walls-list">
+                        <!-- Wall Pitch: North/Top -->
+                        <div class="pitch-wall-card">
+                            <div class="pitch-wall-header">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="pitch-top-enable">
+                                    <span class="checkmark"></span>
+                                    <span>Wand Oben (Nord)</span>
+                                </label>
+                            </div>
+                            <div class="pitch-wall-details hidden" id="pitch-top-details">
+                                <div class="details-grid">
+                                    <div class="input-subgroup">
+                                        <label for="pitch-top-kniestock">Kniestock (cm)</label>
+                                        <input type="number" id="pitch-top-kniestock" min="0" max="220" value="80">
+                                    </div>
+                                    <div class="input-subgroup">
+                                        <label for="pitch-top-run">Breite (cm)</label>
+                                        <input type="number" id="pitch-top-run" min="50" max="400" value="150">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wall Pitch: Right/East -->
+                        <div class="pitch-wall-card">
+                            <div class="pitch-wall-header">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="pitch-right-enable">
+                                    <span class="checkmark"></span>
+                                    <span>Wand Rechts (Ost)</span>
+                                </label>
+                            </div>
+                            <div class="pitch-wall-details hidden" id="pitch-right-details">
+                                <div class="details-grid">
+                                    <div class="input-subgroup">
+                                        <label for="pitch-right-kniestock">Kniestock (cm)</label>
+                                        <input type="number" id="pitch-right-kniestock" min="0" max="220" value="80">
+                                    </div>
+                                    <div class="input-subgroup">
+                                        <label for="pitch-right-run">Breite (cm)</label>
+                                        <input type="number" id="pitch-right-run" min="50" max="400" value="150">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wall Pitch: Bottom/South -->
+                        <div class="pitch-wall-card">
+                            <div class="pitch-wall-header">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="pitch-bottom-enable">
+                                    <span class="checkmark"></span>
+                                    <span>Wand Unten (Süd)</span>
+                                </label>
+                            </div>
+                            <div class="pitch-wall-details hidden" id="pitch-bottom-details">
+                                <div class="details-grid">
+                                    <div class="input-subgroup">
+                                        <label for="pitch-bottom-kniestock">Kniestock (cm)</label>
+                                        <input type="number" id="pitch-bottom-kniestock" min="0" max="220" value="80">
+                                    </div>
+                                    <div class="input-subgroup">
+                                        <label for="pitch-bottom-run">Breite (cm)</label>
+                                        <input type="number" id="pitch-bottom-run" min="50" max="400" value="150">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Wall Pitch: Left/West -->
+                        <div class="pitch-wall-card">
+                            <div class="pitch-wall-header">
+                                <label class="checkbox-container">
+                                    <input type="checkbox" id="pitch-left-enable">
+                                    <span class="checkmark"></span>
+                                    <span>Wand Links (West)</span>
+                                </label>
+                            </div>
+                            <div class="pitch-wall-details hidden" id="pitch-left-details">
+                                <div class="details-grid">
+                                    <div class="input-subgroup">
+                                        <label for="pitch-left-kniestock">Kniestock (cm)</label>
+                                        <input type="number" id="pitch-left-kniestock" min="0" max="220" value="80">
+                                    </div>
+                                    <div class="input-subgroup">
+                                        <label for="pitch-left-run">Breite (cm)</label>
+                                        <input type="number" id="pitch-left-run" min="50" max="400" value="150">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Wall Elements -->
+                <div class="tab-panel" id="tab-elements">
+                    <h2>Wandelemente einfügen</h2>
+                    <p class="section-desc">Klicken Sie auf ein Element, um es der ausgewählten Wand hinzuzufügen.</p>
+                    
+                    <div class="element-picker-grid">
+                        <button class="add-elem-btn" data-type="door">
+                            <div class="elem-preview door-preview"></div>
+                            <span>Tür</span>
+                        </button>
+                        <button class="add-elem-btn" data-type="window">
+                            <div class="elem-preview window-preview"></div>
+                            <span>Fenster</span>
+                        </button>
+                        <button class="add-elem-btn" data-type="skylight" id="skylight-add-btn">
+                            <div class="elem-preview skylight-preview"></div>
+                            <span>Dachfenster</span>
+                        </button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <h2>Platzierte Elemente</h2>
+                    <div class="placed-list" id="placed-elements-list">
+                        <p class="empty-list-text">Keine Wandelemente platziert.</p>
+                    </div>
+                </div>
+
+                <!-- Tab: Installations -->
+                <div class="tab-panel" id="tab-installations">
+                    <h2>Anschlüsse & Schalter</h2>
+                    <p class="section-desc">Fügen Sie Steckdosen, Schalter oder Anschlüsse hinzu.</p>
+                    
+                    <div class="installation-picker-grid">
+                        <button class="add-inst-btn" data-type="socket">
+                            <div class="inst-icon socket-icon">⚡</div>
+                            <span>Steckdose</span>
+                        </button>
+                        <button class="add-inst-btn" data-type="switch">
+                            <div class="inst-icon switch-icon">⚪</div>
+                            <span>Lichtschalter</span>
+                        </button>
+                        <button class="add-inst-btn" data-type="lan">
+                            <div class="inst-icon lan-icon">🌐</div>
+                            <span>LAN</span>
+                        </button>
+                        <button class="add-inst-btn" data-type="sat">
+                            <div class="inst-icon sat-icon">📡</div>
+                            <span>SAT</span>
+                        </button>
+                        <button class="add-inst-btn" data-type="power">
+                            <div class="inst-icon power-icon">⚡🔥</div>
+                            <span>Starkstrom</span>
+                        </button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <h2>Platzierte Anschlüsse</h2>
+                    <div class="placed-list" id="placed-installations-list">
+                        <p class="empty-list-text">Keine Anschlüsse platziert.</p>
+                    </div>
+                </div>
+
+                <!-- Tab: Furniture -->
+                <div class="tab-panel" id="tab-furniture">
+                    <h2>Möbel-Vorlagen</h2>
+                    <p class="section-desc">Klicken Sie, um ein Möbelstück im Raum zu platzieren.</p>
+                    
+                    <div class="furniture-presets-grid">
+                        <button class="preset-btn" data-preset="bed">
+                            <i data-lucide="bed"></i>
+                            <span>Doppelbett</span>
+                        </button>
+                        <button class="preset-btn" data-preset="wardrobe">
+                            <i data-lucide="columns"></i>
+                            <span>Schrank</span>
+                        </button>
+                        <button class="preset-btn" data-preset="desk">
+                            <i data-lucide="projector"></i>
+                            <span>Schreibtisch</span>
+                        </button>
+                        <button class="preset-btn" data-preset="chair">
+                            <i data-lucide="tablet"></i>
+                            <span>Stuhl</span>
+                        </button>
+                        <button class="preset-btn" data-preset="sofa">
+                            <i data-lucide="armchair"></i>
+                            <span>Sofa</span>
+                        </button>
+                        <button class="preset-btn" data-preset="table">
+                            <i data-lucide="grid"></i>
+                            <span>Esstisch</span>
+                        </button>
+                        <button class="preset-btn" data-preset="custom-rect">
+                            <i data-lucide="square"></i>
+                            <span>Eckiges Custom</span>
+                        </button>
+                        <button class="preset-btn" data-preset="custom-circle">
+                            <i data-lucide="circle"></i>
+                            <span>Rundes Custom</span>
+                        </button>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <h2>Platzierte Möbel</h2>
+                    <div class="placed-list" id="placed-furniture-list">
+                        <p class="empty-list-text">Keine Möbel im Raum platziert.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Properties Panel (Floating or pinned at bottom) -->
+            <div class="properties-panel" id="properties-panel">
+                <div class="properties-header">
+                    <h3>Ausgewähltes Objekt</h3>
+                    <button class="close-prop-btn" id="close-properties"><i data-lucide="x"></i></button>
+                </div>
+                <div class="properties-content" id="properties-content">
+                    <!-- Loaded dynamically via JS -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace Area -->
+        <main class="workspace">
+            <!-- Top Toolbar -->
+            <header class="toolbar">
+                <div class="toolbar-left">
+                    <div class="view-toggles">
+                        <button class="tool-btn active" id="btn-view-2d">2D Grundriss</button>
+                        <button class="tool-btn" id="btn-view-split">Split-Screen</button>
+                        <button class="tool-btn" id="btn-view-3d">3D Vorschau</button>
+                    </div>
+                </div>
+
+                <div class="toolbar-right">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-grid" checked>
+                        <span class="slider"></span>
+                        <span>Raster (10cm)</span>
+                    </label>
+
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggle-collision" checked>
+                        <span class="slider"></span>
+                        <span>Kollisionen</span>
+                    </label>
+
+                    <div class="toolbar-separator"></div>
+
+                    <button class="btn btn-secondary" id="btn-save-project" title="Im Browser speichern">
+                        <i data-lucide="save"></i>
+                        <span>Speichern</span>
+                    </button>
+                    <button class="btn btn-secondary" id="btn-load-project" title="Aus dem Browser laden">
+                        <i data-lucide="folder-open"></i>
+                        <span>Laden</span>
+                    </button>
+                    
+                    <div class="toolbar-separator"></div>
+                    
+                    <button class="btn btn-secondary" id="btn-export-json" title="Als JSON-Datei exportieren">
+                        <i data-lucide="download"></i>
+                    </button>
+                    <button class="btn btn-secondary" id="btn-import-json" title="JSON-Datei importieren">
+                        <i data-lucide="upload"></i>
+                    </button>
+                    <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                    
+                    <div class="toolbar-separator"></div>
+
+                    <button class="btn btn-secondary" id="btn-example-room" title="Beispiel-Raum laden">
+                        <i data-lucide="sparkles"></i>
+                        <span>Demo</span>
+                    </button>
+                    <button class="btn btn-danger" id="btn-clear-room" title="Alles löschen">
+                        <i data-lucide="trash-2"></i>
+                        <span>Raum leeren</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Grid Layout representing Split or Single View -->
+            <div class="split-workspace view-2d" id="workspace-layout">
+                <!-- 2D Canvas Editor -->
+                <div class="editor-pane" id="pane-2d">
+                    <div class="canvas-wrapper">
+                        <canvas id="editorCanvas"></canvas>
+                        <!-- Canvas Controls -->
+                        <div class="canvas-controls">
+                            <button id="zoom-in" title="Vergrößern"><i data-lucide="zoom-in"></i></button>
+                            <button id="zoom-out" title="Verkleinern"><i data-lucide="zoom-out"></i></button>
+                            <button id="zoom-reset" title="Fokus zurücksetzen"><i data-lucide="maximize-2"></i></button>
+                        </div>
+                        <!-- Canvas Instructions / Status -->
+                        <div class="canvas-status" id="canvas-status">
+                            Raster-Snapping aktiv | Ziehe Möbel zum Platzieren | Mausrad zum Zoomen
+                        </div>
+                        
+                        <!-- Collision Alert Badge -->
+                        <div class="collision-badge hidden" id="collision-alert">
+                            <i data-lucide="alert-triangle"></i> Kollision detected!
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3D Preview Panel -->
+                <div class="preview-pane" id="pane-3d">
+                    <div class="threejs-wrapper">
+                        <div id="threeCanvasContainer"></div>
+                        <div class="three-controls-info">
+                            <i data-lucide="info"></i> Links klick + Ziehen: Drehen | Rechts klick + Ziehen: Bewegen | Scrollen: Zoom
+                        </div>
+                        <!-- Loading or notification in 3D -->
+                        <div class="threejs-overlay" id="threejs-overlay">
+                            Bereit
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="app.js?v=1.0.5"></script>
+    <script>
+        // Initialize lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>

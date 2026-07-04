@@ -1,0 +1,11 @@
+{
+  "name": "roomcraft",
+  "version": "1.0.0",
+  "description": "Premium 2D/3D Room Planner",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx -y http-server -p 3000"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
