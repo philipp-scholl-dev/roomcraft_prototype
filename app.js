@@ -220,6 +220,8 @@ const CollisionEngine = {
     },
 
     checkRoofPitchCollision(f) {
+        if (f.isObstacle) return false; // Obstacles automatically conform to the ceiling height and do not collide
+        
         // For a piece of furniture, check if its height exceeds the ceiling height at any footprint point
         if (f.shape === 'circle') {
             // For a circle, check the center and 4 perimeter points
@@ -341,6 +343,51 @@ function getWallCoordinates(wall, position) {
         case 'bottom': return { x: room.width - position, y: room.depth, angle: Math.PI };
         case 'left': return { x: 0, y: room.depth - position, angle: -Math.PI / 2 };
     }
+}
+
+// Helper to generate a 3D box geometry with a slanted top (to conform to roof pitch)
+function createSlantedBoxGeometry(w, l, h0, h1, h2, h3) {
+    const geom = new THREE.BufferGeometry();
+    
+    const p0 = { x: -w/2, y: 0, z: -l/2 }; // NW bottom
+    const p1 = { x: w/2, y: 0, z: -l/2 };  // NE bottom
+    const p2 = { x: w/2, y: 0, z: l/2 };   // SE bottom
+    const p3 = { x: -w/2, y: 0, z: l/2 };  // SW bottom
+    
+    const p4 = { x: -w/2, y: h0, z: -l/2 }; // NW top
+    const p5 = { x: w/2, y: h1, z: -l/2 };  // NE top
+    const p6 = { x: w/2, y: h2, z: l/2 };   // SE top
+    const p7 = { x: -w/2, y: h3, z: l/2 };  // SW top
+    
+    const vertices = new Float32Array([
+        // Bottom (facing -Y)
+        p0.x, p0.y, p0.z,  p2.x, p2.y, p2.z,  p3.x, p3.y, p3.z,
+        p0.x, p0.y, p0.z,  p1.x, p1.y, p1.z,  p2.x, p2.y, p2.z,
+        
+        // Top (facing +Y)
+        p4.x, p4.y, p4.z,  p5.x, p5.y, p5.z,  p6.x, p6.y, p6.z,
+        p4.x, p4.y, p4.z,  p6.x, p6.y, p6.z,  p7.x, p7.y, p7.z,
+        
+        // Front (+Z)
+        p3.x, p3.y, p3.z,  p2.x, p2.y, p2.z,  p6.x, p6.y, p6.z,
+        p3.x, p3.y, p3.z,  p6.x, p6.y, p6.z,  p7.x, p7.y, p7.z,
+        
+        // Back (-Z)
+        p1.x, p1.y, p1.z,  p0.x, p0.y, p0.z,  p4.x, p4.y, p4.z,
+        p1.x, p1.y, p1.z,  p4.x, p4.y, p4.z,  p5.x, p5.y, p5.z,
+        
+        // Left (-X)
+        p0.x, p0.y, p0.z,  p3.x, p3.y, p3.z,  p7.x, p7.y, p7.z,
+        p0.x, p0.y, p0.z,  p7.x, p7.y, p7.z,  p4.x, p4.y, p4.z,
+        
+        // Right (+X)
+        p2.x, p2.y, p2.z,  p1.x, p1.y, p1.z,  p5.x, p5.y, p5.z,
+        p2.x, p2.y, p2.z,  p5.x, p5.y, p5.z,  p6.x, p6.y, p6.z
+    ]);
+    
+    geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geom.computeVertexNormals();
+    return geom;
 }
 
 // Helper to check if mouse is hovering over a wall element along its width
@@ -2014,9 +2061,33 @@ const Viewer3D = {
             mesh.position.y = heightVal / 2; // Sit on floor
         } else {
             // Rectangle
-            const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
-            mesh = new THREE.Mesh(boxGeo, mat);
-            mesh.position.y = heightVal / 2; // Sit on floor
+            if (isObstacle) {
+                // Calculate height of the 4 corners to construct a slanted box geometry
+                const rad = (f.rotation * Math.PI) / 180;
+                const cos = Math.cos(rad);
+                const sin = Math.sin(rad);
+                
+                const corners = [
+                    { lx: -f.w/2, ly: -f.l/2 }, // NW
+                    { lx: f.w/2, ly: -f.l/2 },  // NE
+                    { lx: f.w/2, ly: f.l/2 },   // SE
+                    { lx: -f.w/2, ly: f.l/2 }    // SW
+                ];
+                
+                const heights = corners.map(c => {
+                    const gx = f.x + c.lx * cos - c.ly * sin;
+                    const gy = f.y + c.lx * sin + c.ly * cos;
+                    return getCeilingHeightAt(gx, gy);
+                });
+                
+                const boxGeo = createSlantedBoxGeometry(f.w, f.l, heights[0], heights[1], heights[2], heights[3]);
+                mesh = new THREE.Mesh(boxGeo, mat);
+                mesh.position.y = 0; // Sit on floor (origin is already at bottom Y = 0!)
+            } else {
+                const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
+                mesh = new THREE.Mesh(boxGeo, mat);
+                mesh.position.y = heightVal / 2; // Sit on floor
+            }
         }
         
         mesh.castShadow = true;
@@ -2025,9 +2096,31 @@ const Viewer3D = {
         
         // Draw selected indicators in 3D
         if (State.selectedItem === f) {
-            const edgesGeo = new THREE.EdgesGeometry(f.shape === 'circle' ? new THREE.CylinderGeometry(f.w/2, f.w/2, heightVal, 16) : new THREE.BoxGeometry(f.w + 1, heightVal + 1, f.l + 1));
+            let edgesGeo;
+            if (f.shape === 'circle') {
+                edgesGeo = new THREE.EdgesGeometry(new THREE.CylinderGeometry(f.w/2, f.w/2, heightVal, 16));
+            } else if (isObstacle) {
+                const rad = (f.rotation * Math.PI) / 180;
+                const cos = Math.cos(rad);
+                const sin = Math.sin(rad);
+                const corners = [
+                    { lx: -f.w/2, ly: -f.l/2 }, // NW
+                    { lx: f.w/2, ly: -f.l/2 },  // NE
+                    { lx: f.w/2, ly: f.l/2 },   // SE
+                    { lx: -f.w/2, ly: f.l/2 }    // SW
+                ];
+                const heights = corners.map(c => {
+                    const gx = f.x + c.lx * cos - c.ly * sin;
+                    const gy = f.y + c.lx * sin + c.ly * cos;
+                    return getCeilingHeightAt(gx, gy);
+                });
+                edgesGeo = new THREE.EdgesGeometry(createSlantedBoxGeometry(f.w + 1, f.l + 1, heights[0] + 1, heights[1] + 1, heights[2] + 1, heights[3] + 1));
+            } else {
+                edgesGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(f.w + 1, heightVal + 1, f.l + 1));
+            }
+            
             const line = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 }));
-            line.position.y = heightVal / 2;
+            line.position.y = isObstacle ? 0 : heightVal / 2;
             group.add(line);
         }
         
@@ -3053,7 +3146,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.0.8");
+    console.log("RoomCraft App loaded - Version 1.0.9");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
