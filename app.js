@@ -621,34 +621,11 @@ const Editor2D = {
             // Center element alignment locally
             const halfW = elem.w / 2;
             
-            if (elem.type === 'door') {
-                const hinge = elem.hinge || 'left';
+            if (elem.type === 'door' || elem.type === 'double-door') {
                 const dir = elem.direction || 'in';
-                const isLeft = hinge === 'left';
                 const isIn = dir === 'in';
                 
-                const hX = isLeft ? -halfW : halfW;
-                const leafY = isIn ? elem.w : -elem.w; // Inwards is local +y, Outwards is local -y
-                const anticlockwise = isLeft ? !isIn : isIn;
-                
-                // Draw door swing arc
-                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash([2, 2]);
-                ctx.beginPath();
-                ctx.arc(hX, 0, elem.w, isLeft ? 0 : Math.PI, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise);
-                ctx.stroke();
-                ctx.setLineDash([]);
-                
-                // Draw open door leaf
-                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(38, 92%, 50%)';
-                ctx.lineWidth = 3.5;
-                ctx.beginPath();
-                ctx.moveTo(hX, 0);
-                ctx.lineTo(hX, leafY);
-                ctx.stroke();
-                
-                // Draw clear opening on wall
+                // Draw clear opening on wall first so it overlaps the wall line
                 ctx.strokeStyle = '#0b0f19'; // App background to overlap wall line
                 ctx.lineWidth = 7;
                 ctx.beginPath();
@@ -660,6 +637,74 @@ const Editor2D = {
                 ctx.fillStyle = '#64748b';
                 ctx.fillRect(-halfW - 2, -3, 4, 6);
                 ctx.fillRect(halfW - 2, -3, 4, 6);
+                
+                if (elem.type === 'door') {
+                    const hinge = elem.hinge || 'left';
+                    const isLeft = hinge === 'left';
+                    const hX = isLeft ? -halfW : halfW;
+                    const leafY = isIn ? elem.w : -elem.w;
+                    const anticlockwise = isLeft ? !isIn : isIn;
+                    
+                    // Draw swing arc
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([2, 2]);
+                    ctx.beginPath();
+                    ctx.arc(hX, 0, elem.w, isLeft ? 0 : Math.PI, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    
+                    // Draw open door leaf
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(38, 92%, 50%)';
+                    ctx.lineWidth = 3.5;
+                    ctx.beginPath();
+                    ctx.moveTo(hX, 0);
+                    ctx.lineTo(hX, leafY);
+                    ctx.stroke();
+                } else {
+                    // Double door: has two wings of width halfW
+                    const leafY = isIn ? halfW : -halfW;
+                    
+                    // Left wing: hinge at -halfW, leaf length halfW, swing radius halfW
+                    const hX_L = -halfW;
+                    const anticlockwise_L = !isIn;
+                    
+                    // Right wing: hinge at halfW, leaf length halfW, swing radius halfW
+                    const hX_R = halfW;
+                    const anticlockwise_R = isIn;
+                    
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([2, 2]);
+                    
+                    // Draw Left swing arc
+                    ctx.beginPath();
+                    ctx.arc(hX_L, 0, halfW, 0, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise_L);
+                    ctx.stroke();
+                    
+                    // Draw Right swing arc
+                    ctx.beginPath();
+                    ctx.arc(hX_R, 0, halfW, Math.PI, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise_R);
+                    ctx.stroke();
+                    
+                    ctx.setLineDash([]);
+                    
+                    // Draw door leaves
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(38, 92%, 50%)';
+                    ctx.lineWidth = 3.5;
+                    
+                    // Left leaf
+                    ctx.beginPath();
+                    ctx.moveTo(hX_L, 0);
+                    ctx.lineTo(hX_L, leafY);
+                    ctx.stroke();
+                    
+                    // Right leaf
+                    ctx.beginPath();
+                    ctx.moveTo(hX_R, 0);
+                    ctx.lineTo(hX_R, leafY);
+                    ctx.stroke();
+                }
                 
             } else if (elem.type === 'window') {
                 // Clear wall below window
@@ -1546,7 +1591,7 @@ const Viewer3D = {
                 const halfW = elem.w / 2;
                 const holePath = new THREE.Path();
                 
-                if (elem.type === 'door') {
+                if (elem.type === 'door' || elem.type === 'double-door') {
                     // Door hole starts at floor level (v=0)
                     holePath.moveTo(elem.position - halfW, 0);
                     holePath.lineTo(elem.position + halfW, 0);
@@ -1555,8 +1600,12 @@ const Viewer3D = {
                     holePath.closePath();
                     shape.holes.push(holePath);
                     
-                    // Create simple wood frame & door leaf mesh
-                    this.createDoorMesh3D(spec, elem);
+                    // Create wood frame & door leaf mesh
+                    if (elem.type === 'door') {
+                        this.createDoorMesh3D(spec, elem);
+                    } else {
+                        this.createDoubleDoorMesh3D(spec, elem);
+                    }
                     
                 } else if (elem.type === 'window') {
                     // Window hole sits at sill height
@@ -1665,6 +1714,64 @@ const Viewer3D = {
         frameTop.position.set(0, door.h - 2, 0);
         
         doorGroup.add(pivot);
+        doorGroup.add(frameTop);
+        
+        let dx = 0, dz = 0;
+        const halfThick = 10 / 2; // wall thickness is 10
+        if (spec.name === 'top') dz = -halfThick;
+        else if (spec.name === 'bottom') dz = halfThick;
+        else if (spec.name === 'left') dx = -halfThick;
+        else if (spec.name === 'right') dx = halfThick;
+
+        // Position door group
+        doorGroup.position.set(coords.x + offset.x + dx, 0, coords.y + offset.z + dz);
+        doorGroup.rotation.y = -spec.angle;
+        
+        this.scene.add(doorGroup);
+        this.doorMeshes.push(doorGroup);
+    },
+    
+    createDoubleDoorMesh3D(spec, door) {
+        const offset = this.roomOffset;
+        const coords = getWallCoordinates(spec.name, door.position);
+        
+        const doorGroup = new THREE.Group();
+        
+        const dir = door.direction || 'in';
+        const isIn = dir === 'in';
+        
+        // Each leaf is half width
+        const leafW = door.w / 2 - 2;
+        const leafGeo = new THREE.BoxGeometry(leafW, door.h - 4, 3);
+        const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+        
+        // 1. Left Leaf
+        const leafL = new THREE.Mesh(leafGeo, leafMat);
+        leafL.position.set(leafW / 2, (door.h - 4) / 2, 0);
+        const pivotL = new THREE.Group();
+        pivotL.position.set(-door.w / 2 + 2, 2, 0);
+        pivotL.add(leafL);
+        
+        // 2. Right Leaf
+        const leafR = new THREE.Mesh(leafGeo, leafMat);
+        leafR.position.set(-leafW / 2, (door.h - 4) / 2, 0);
+        const pivotR = new THREE.Group();
+        pivotR.position.set(door.w / 2 - 2, 2, 0);
+        pivotR.add(leafR);
+        
+        // Rotate both open by 45 degrees
+        let openAngle = Math.PI / 4;
+        pivotL.rotation.y = isIn ? -openAngle : openAngle;
+        pivotR.rotation.y = isIn ? openAngle : -openAngle;
+        
+        // Door Frame (top beam)
+        const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
+        const frameTop = new THREE.Mesh(frameGeo, frameMat);
+        frameTop.position.set(0, door.h - 2, 0);
+        
+        doorGroup.add(pivotL);
+        doorGroup.add(pivotR);
         doorGroup.add(frameTop);
         
         let dx = 0, dz = 0;
@@ -2212,7 +2319,7 @@ function buildPropertiesPanelContent() {
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
                     <label>Typ</label>
-                    <input type="text" value="${item.type === 'door' ? 'Tür' : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
+                    <input type="text" value="${item.type === 'door' ? 'Tür' : item.type === 'double-door' ? 'Doppeltür' : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
@@ -2246,14 +2353,16 @@ function buildPropertiesPanelContent() {
                         <label>Brüstungshöhe (cm)</label>
                         <input type="number" id="prop-sill" value="${item.sillHeight || 90}" min="0" max="200">
                     </div>
-                ` : item.type === 'door' ? `
-                    <div class="prop-field">
-                        <label>Anschlag</label>
-                        <select id="prop-hinge">
-                            <option value="left" ${item.hinge === 'left' ? 'selected' : ''}>Links (Standard)</option>
-                            <option value="right" ${item.hinge === 'right' ? 'selected' : ''}>Rechts</option>
-                        </select>
-                    </div>
+                ` : (item.type === 'door' || item.type === 'double-door') ? `
+                    ${item.type === 'door' ? `
+                        <div class="prop-field">
+                            <label>Anschlag</label>
+                            <select id="prop-hinge">
+                                <option value="left" ${item.hinge === 'left' ? 'selected' : ''}>Links (Standard)</option>
+                                <option value="right" ${item.hinge === 'right' ? 'selected' : ''}>Rechts</option>
+                            </select>
+                        </div>
+                    ` : ''}
                     <div class="prop-field">
                         <label>Öffnungsrichtung</label>
                         <select id="prop-dir">
@@ -2781,8 +2890,8 @@ function initUIEvents() {
                 type: type,
                 wall: targetWall,
                 position: maxPos / 2,
-                w: type === 'door' ? 90 : type === 'window' ? 100 : 80,
-                h: type === 'door' ? 200 : type === 'window' ? 120 : 120
+                w: type === 'door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
+                h: type === 'door' || type === 'double-door' ? 200 : type === 'window' ? 120 : 120
             };
             
             if (type === 'window') {
@@ -2933,7 +3042,7 @@ function updatePlacedListsUI() {
     renderList('placed-furniture-list', State.furniture, f => `${f.name} (${f.w}x${f.l}x${f.h}cm)`, 'furniture');
     
     // Render Wall Elements List
-    const elemNames = { door: 'Tür', window: 'Fenster', skylight: 'Dachfenster' };
+    const elemNames = { door: 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
     const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
     renderList('placed-elements-list', State.elements, el => `${elemNames[el.type]} (${wallsMap[el.wall]} - ${el.position}cm)`, 'element');
     
@@ -2944,7 +3053,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.0.7");
+    console.log("RoomCraft App loaded - Version 1.0.8");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
