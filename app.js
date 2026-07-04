@@ -853,11 +853,41 @@ const Editor2D = {
             } else {
                 // Rectangle
                 ctx.fillRect(-f.w / 2, -f.l / 2, f.w, f.l);
+                
+                // Cross hatch pattern for chimney/obstacle
+                if (f.isObstacle) {
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(-f.w / 2, -f.l / 2, f.w, f.l);
+                    ctx.clip();
+                    
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                    ctx.lineWidth = 1.0;
+                    const step = 15;
+                    const limit = Math.max(f.w, f.l);
+                    for (let k = -limit * 2; k < limit * 2; k += step) {
+                        // Line /
+                        ctx.beginPath();
+                        ctx.moveTo(k, -f.l / 2);
+                        ctx.lineTo(k + f.l, f.l / 2);
+                        ctx.stroke();
+                        
+                        // Line \
+                        ctx.beginPath();
+                        ctx.moveTo(k, f.l / 2);
+                        ctx.lineTo(k + f.l, -f.l / 2);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                }
+                
                 ctx.strokeRect(-f.w / 2, -f.l / 2, f.w, f.l);
                 
                 // Draw face direction line (e.g. front of wardrobe/sofa)
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-                ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
+                if (!f.isObstacle) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+                    ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
+                }
             }
             
             // Draw Text Label (Name & dimensions)
@@ -1839,13 +1869,19 @@ const Viewer3D = {
         }
         
         // Create Mesh geometries based on properties
-        const colorVal = f.isColliding ? 0xef4444 : (parseInt(f.color.replace(/[^0-9]/g, '')) || 0x8b5cf6);
+        const isObstacle = f.isObstacle || false;
+        const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
+        
+        let colorVal = f.isColliding ? 0xef4444 : (parseInt(f.color.replace(/[^0-9]/g, '')) || 0x8b5cf6);
+        if (isObstacle && !f.isColliding) {
+            colorVal = 0x334155; // match slate-700 wall color
+        }
         
         // Material
         const mat = new THREE.MeshStandardMaterial({
             color: colorVal,
-            roughness: 0.5,
-            metalness: 0.1
+            roughness: isObstacle ? 0.8 : 0.5,
+            metalness: isObstacle ? 0.1 : 0.1
         });
         
         if (f.isColliding) {
@@ -1854,7 +1890,7 @@ const Viewer3D = {
             mat.metalness = 0.5;
         } else {
             // Convert HSL color string to color
-            if (f.color.startsWith('hsl')) {
+            if (!isObstacle && f.color.startsWith('hsl')) {
                 // Parse e.g. "hsl(263, 70%, 55%)"
                 const parts = f.color.match(/\d+/g);
                 if (parts && parts.length >= 3) {
@@ -1869,14 +1905,14 @@ const Viewer3D = {
         let mesh;
         if (f.shape === 'circle') {
             const radius = f.w / 2;
-            const cylGeo = new THREE.CylinderGeometry(radius, radius, f.h, 32);
+            const cylGeo = new THREE.CylinderGeometry(radius, radius, heightVal, 32);
             mesh = new THREE.Mesh(cylGeo, mat);
-            mesh.position.y = f.h / 2; // Sit on floor
+            mesh.position.y = heightVal / 2; // Sit on floor
         } else {
             // Rectangle
-            const boxGeo = new THREE.BoxGeometry(f.w, f.h, f.l);
+            const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
             mesh = new THREE.Mesh(boxGeo, mat);
-            mesh.position.y = f.h / 2; // Sit on floor
+            mesh.position.y = heightVal / 2; // Sit on floor
         }
         
         mesh.castShadow = true;
@@ -1885,9 +1921,9 @@ const Viewer3D = {
         
         // Draw selected indicators in 3D
         if (State.selectedItem === f) {
-            const edgesGeo = new THREE.EdgesGeometry(f.shape === 'circle' ? new THREE.CylinderGeometry(f.w/2, f.w/2, f.h, 16) : new THREE.BoxGeometry(f.w + 1, f.h + 1, f.l + 1));
+            const edgesGeo = new THREE.EdgesGeometry(f.shape === 'circle' ? new THREE.CylinderGeometry(f.w/2, f.w/2, heightVal, 16) : new THREE.BoxGeometry(f.w + 1, heightVal + 1, f.l + 1));
             const line = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 }));
-            line.position.y = f.h / 2;
+            line.position.y = heightVal / 2;
             group.add(line);
         }
         
@@ -1962,7 +1998,8 @@ const Presets = {
     sofa: { name: 'Sofa', shape: 'rect', w: 210, l: 95, h: 80, color: 'hsl(263, 40%, 45%)', collisionEnabled: true },
     table: { name: 'Esstisch', shape: 'rect', w: 160, l: 90, h: 76, color: 'hsl(35, 45%, 40%)', collisionEnabled: true },
     'custom-rect': { name: 'Custom Box', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
-    'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true }
+    'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
+    chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true }
 };
 
 function loadExampleRoom() {
@@ -2137,7 +2174,7 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Höhe (cm)</label>
-                    <input type="number" id="prop-h" value="${item.h}" min="10" max="300">
+                    <input type="number" id="prop-h" value="${item.isObstacle ? Math.round(getCeilingHeightAt(item.x, item.y)) : item.h}" min="10" max="350" ${item.isObstacle ? 'disabled' : ''}>
                 </div>
                 <div class="prop-field">
                     <label>Rotation (Grad)</label>
@@ -2441,7 +2478,7 @@ function syncPropertiesPanel() {
     if (State.selectedItemType === 'furniture') {
         setVal('prop-w', item.w);
         setVal('prop-l', item.l);
-        setVal('prop-h', item.h);
+        setVal('prop-h', item.isObstacle ? getCeilingHeightAt(item.x, item.y) : item.h);
         setVal('prop-rot', item.rotation);
     } else {
         setVal('prop-pos', item.position);
@@ -2698,6 +2735,7 @@ function initUIEvents() {
                 rotation: 0,
                 color: p.color,
                 collisionEnabled: p.collisionEnabled,
+                isObstacle: p.isObstacle || false,
                 isColliding: false
             };
             
@@ -2909,7 +2947,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.0.5");
+    console.log("RoomCraft App loaded - Version 1.0.6");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
