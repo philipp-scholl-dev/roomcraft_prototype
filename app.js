@@ -405,14 +405,15 @@ function isMouseOverWallElement(elem, m) {
     // lx is along the wall (from -halfW to halfW)
     // ly is normal to the wall (positive ly goes inwards of the room)
     
-    if (elem.type === 'door') {
+    if (elem.type === 'door' || elem.type === 'double-door') {
         const dir = elem.direction || 'in';
         const isIn = dir === 'in';
         
         const inX = Math.abs(lx) <= halfW + 10;
+        const swingDepth = elem.type === 'double-door' ? halfW : elem.w;
         const inY = isIn 
-            ? (ly >= -10 && ly <= elem.w + 10) 
-            : (ly >= -elem.w - 10 && ly <= 10);
+            ? (ly >= -10 && ly <= swingDepth + 10) 
+            : (ly >= -swingDepth - 10 && ly <= 10);
             
         return inX && inY;
     } else if (elem.type === 'window') {
@@ -3146,7 +3147,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.0.9");
+    console.log("RoomCraft App loaded - Version 1.1.0");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
