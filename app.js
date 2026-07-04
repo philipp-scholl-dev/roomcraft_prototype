@@ -345,36 +345,36 @@ function getWallCoordinates(wall, position) {
 
 // Helper to check if mouse is hovering over a wall element along its width
 function isMouseOverWallElement(elem, m) {
-    const room = State.room;
-    const threshold = 20; // click tolerance in cm
-    const halfW = elem.w / 2;
     const coords = getWallCoordinates(elem.wall, elem.position);
+    const halfW = elem.w / 2;
     
-    if (elem.type === 'skylight') {
+    // Transform mouse to local coordinate space of the wall segment
+    const dx = m.x - coords.x;
+    const dy = m.y - coords.y;
+    const rad = -coords.angle;
+    const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+    const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+    
+    // lx is along the wall (from -halfW to halfW)
+    // ly is normal to the wall (positive ly goes inwards of the room)
+    
+    if (elem.type === 'door') {
+        const dir = elem.direction || 'in';
+        const isIn = dir === 'in';
+        
+        const inX = Math.abs(lx) <= halfW + 10;
+        const inY = isIn 
+            ? (ly >= -10 && ly <= elem.w + 10) 
+            : (ly >= -elem.w - 10 && ly <= 10);
+            
+        return inX && inY;
+    } else if (elem.type === 'window') {
+        return Math.abs(lx) <= halfW + 10 && Math.abs(ly) <= 20;
+    } else if (elem.type === 'skylight') {
         const dist = elem.distanceFromWall || 60;
-        let cx = coords.x, cy = coords.y;
-        if (elem.wall === 'top') cy += dist;
-        else if (elem.wall === 'right') cx -= dist;
-        else if (elem.wall === 'bottom') cy -= dist;
-        else if (elem.wall === 'left') cx += dist;
-        
-        const sizeX = (elem.wall === 'top' || elem.wall === 'bottom') ? elem.w : elem.h;
-        const sizeY = (elem.wall === 'top' || elem.wall === 'bottom') ? elem.h : elem.w;
-        
-        return Math.abs(m.x - cx) < sizeX / 2 + 10 && Math.abs(m.y - cy) < sizeY / 2 + 10;
-    }
-    
-    switch (elem.wall) {
-        case 'top':
-            return Math.abs(m.y) < threshold && m.x >= elem.position - halfW && m.x <= elem.position + halfW;
-        case 'bottom':
-            const bx = room.width - elem.position;
-            return Math.abs(room.depth - m.y) < threshold && m.x >= bx - halfW && m.x <= bx + halfW;
-        case 'right':
-            return Math.abs(room.width - m.x) < threshold && m.y >= elem.position - halfW && m.y <= elem.position + halfW;
-        case 'left':
-            const ly = room.depth - elem.position;
-            return Math.abs(m.x) < threshold && m.y >= ly - halfW && m.y <= ly + halfW;
+        const halfL = elem.h / 2;
+        // Skylight is centered at local y = dist
+        return Math.abs(lx) <= halfW + 10 && ly >= dist - halfL - 10 && ly <= dist + halfL + 10;
     }
     return false;
 }
@@ -628,18 +628,15 @@ const Editor2D = {
                 const isIn = dir === 'in';
                 
                 const hX = isLeft ? -halfW : halfW;
-                const leafY = isIn ? -elem.w : elem.w;
+                const leafY = isIn ? elem.w : -elem.w; // Inwards is local +y, Outwards is local -y
+                const anticlockwise = isLeft ? !isIn : isIn;
                 
                 // Draw door swing arc
                 ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
                 ctx.lineWidth = 1.5;
                 ctx.setLineDash([2, 2]);
                 ctx.beginPath();
-                if (isLeft) {
-                    ctx.arc(hX, 0, elem.w, 0, isIn ? -Math.PI / 2 : Math.PI / 2, !isIn);
-                } else {
-                    ctx.arc(hX, 0, elem.w, Math.PI, isIn ? -Math.PI / 2 : Math.PI / 2, isIn);
-                }
+                ctx.arc(hX, 0, elem.w, isLeft ? 0 : Math.PI, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise);
                 ctx.stroke();
                 ctx.setLineDash([]);
                 
@@ -2947,7 +2944,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.0.6");
+    console.log("RoomCraft App loaded - Version 1.0.7");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
