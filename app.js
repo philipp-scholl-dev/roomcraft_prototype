@@ -420,10 +420,15 @@ function isMouseOverWallElement(elem, m) {
     } else if (elem.type === 'window') {
         return Math.abs(lx) <= halfW + 10 && Math.abs(ly) <= 20;
     } else if (elem.type === 'skylight') {
-        const dist = elem.distanceFromWall || 60;
-        const halfL = elem.h / 2;
-        // Skylight is centered at local y = dist
-        return Math.abs(lx) <= halfW + 10 && ly >= dist - halfL - 10 && ly <= dist + halfL + 10;
+        const pitch = State.room.pitches[elem.wall];
+        let cosAlpha = 1.0;
+        if (pitch && pitch.enabled) {
+            const slopeAngleRad = Math.atan((State.room.height - pitch.kniestock) / pitch.run);
+            cosAlpha = Math.cos(slopeAngleRad);
+        }
+        const startH = (elem.distanceFromWall || 0) * cosAlpha;
+        const endH = ((elem.distanceFromWall || 0) + elem.h) * cosAlpha;
+        return Math.abs(lx) <= halfW + 10 && ly >= startH - 10 && ly <= endH + 10;
     }
     return false;
 }
@@ -442,13 +447,11 @@ function checkElementOverlap(item, wall, position) {
         
         if (item.type === 'skylight' && el.type === 'skylight') {
             // Check 2D bounding box overlap for skylights on the slant
-            const dist1 = item.distanceFromWall || 60;
-            const dist2 = el.distanceFromWall || 60;
-            const halfH1 = item.h / 2;
-            const halfH2 = el.h / 2;
+            const dist1 = item.distanceFromWall || 0;
+            const dist2 = el.distanceFromWall || 0;
             
             const xOverlap = Math.max(rangeStart, el.position - el.w / 2) < Math.min(rangeEnd, el.position + el.w / 2);
-            const yOverlap = Math.max(dist1 - halfH1, dist2 - halfH2) < Math.min(dist1 + halfH1, dist2 + halfH2);
+            const yOverlap = Math.max(dist1, dist2) < Math.min(dist1 + item.h, dist2 + el.h);
             
             if (xOverlap && yOverlap) return true;
         } else if (item.type !== 'skylight' && el.type !== 'skylight') {
@@ -458,6 +461,31 @@ function checkElementOverlap(item, wall, position) {
         }
     }
     return false;
+}
+
+// Clamps skylight dimensions to fit within the roof slant boundary
+function clampSkylightConstraints(elem) {
+    if (elem.type !== 'skylight') return;
+    
+    const pitch = State.room.pitches[elem.wall];
+    if (!pitch || !pitch.enabled) return;
+    
+    const H = State.room.height;
+    const hk = pitch.kniestock;
+    const r = pitch.run;
+    
+    const slopeAngleRad = Math.atan((H - hk) / r);
+    const cosAlpha = Math.cos(slopeAngleRad);
+    
+    // sMax is the maximum slanted length of the roof slant
+    const sMax = r / cosAlpha;
+    
+    // Clamp the window length (elem.h) so it does not exceed the roof slant length
+    elem.h = Math.max(30, Math.min(sMax, elem.h));
+    
+    // Clamp distanceFromWall (which is the slanted distance of the lower edge from the wall)
+    if (elem.distanceFromWall === undefined) elem.distanceFromWall = 60;
+    elem.distanceFromWall = Math.max(0, Math.min(sMax - elem.h, elem.distanceFromWall));
 }
 
 // Validates if a wall is suitable for a given element type and dimensions (preventing clipping with ceiling)
@@ -671,6 +699,11 @@ const Editor2D = {
         const ctx = this.ctx;
         const w = this.canvas.width / (window.devicePixelRatio || 1);
         const h = this.canvas.height / (window.devicePixelRatio || 1);
+        
+        // Ensure skylights conform to constraints before drawing
+        State.elements.forEach(el => {
+            if (el.type === 'skylight') clampSkylightConstraints(el);
+        });
         
         // Clear
         ctx.fillStyle = '#0b0f19'; // App background
@@ -990,20 +1023,31 @@ const Editor2D = {
             } else if (elem.type === 'skylight') {
                 // Skylight is in a roof pitch. Drawn floating near the wall in 2D
                 // Its coordinates are computed based on pitch direction
-                // Lets draw it as a dashed blue outline at the specified distance from wall
                 // We'll restore rotation first and compute real position
                 ctx.restore();
                 ctx.save();
                 
-                const dist = elem.distanceFromWall || 60;
+                // Get slope angle
+                const pitch = State.room.pitches[elem.wall];
+                let cosAlpha = 1.0;
+                if (pitch && pitch.enabled) {
+                    const slopeAngleRad = Math.atan((State.room.height - pitch.kniestock) / pitch.run);
+                    cosAlpha = Math.cos(slopeAngleRad);
+                }
+                
+                // Slanted distances
+                const sCenter = (elem.distanceFromWall || 0) + elem.h / 2;
+                const dCenterHoriz = sCenter * cosAlpha;
+                const hProj = elem.h * cosAlpha;
+                
                 let sx = coords.x;
                 let sy = coords.y;
                 
                 // Offset normal to wall inwards
-                if (elem.wall === 'top') sy += dist;
-                else if (elem.wall === 'right') sx -= dist;
-                else if (elem.wall === 'bottom') sy -= dist;
-                else if (elem.wall === 'left') sx += dist;
+                if (elem.wall === 'top') sy += dCenterHoriz;
+                else if (elem.wall === 'right') sx -= dCenterHoriz;
+                else if (elem.wall === 'bottom') sy -= dCenterHoriz;
+                else if (elem.wall === 'left') sx += dCenterHoriz;
                 
                 ctx.translate(sx, sy);
                 ctx.rotate(coords.angle);
@@ -1011,17 +1055,17 @@ const Editor2D = {
                 ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(139, 92, 246, 0.8)';
                 ctx.lineWidth = 2;
                 ctx.setLineDash([3, 2]);
-                ctx.strokeRect(-halfW, -elem.h/2, elem.w, elem.h);
+                ctx.strokeRect(-halfW, -hProj/2, elem.w, hProj);
                 ctx.setLineDash([]);
                 
                 ctx.fillStyle = isSelected ? 'rgba(139, 92, 246, 0.25)' : 'rgba(139, 92, 246, 0.1)';
-                ctx.fillRect(-halfW, -elem.h/2, elem.w, elem.h);
+                ctx.fillRect(-halfW, -hProj/2, elem.w, hProj);
                 
                 // Draw an X to represent skylight glass division
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
                 ctx.beginPath();
-                ctx.moveTo(-halfW, -elem.h/2); ctx.lineTo(halfW, elem.h/2);
-                ctx.moveTo(halfW, -elem.h/2); ctx.lineTo(-halfW, elem.h/2);
+                ctx.moveTo(-halfW, -hProj/2); ctx.lineTo(halfW, hProj/2);
+                ctx.moveTo(halfW, -hProj/2); ctx.lineTo(-halfW, hProj/2);
                 ctx.stroke();
                 
                 // Label
@@ -1807,6 +1851,11 @@ const Viewer3D = {
     },
     
     rebuildWalls3D() {
+        // Ensure skylights conform to constraints
+        State.elements.forEach(el => {
+            if (el.type === 'skylight') clampSkylightConstraints(el);
+        });
+        
         // Clear existing walls, doors, windows, skylights
         this.wallMeshes.forEach(m => this.scene.remove(m));
         this.wallMeshes = [];
@@ -2139,16 +2188,28 @@ const Viewer3D = {
     createSkylightMesh3D(spec, elem) {
         const offset = this.roomOffset;
         const coords = getWallCoordinates(spec.name, elem.position);
-        const dist = elem.distanceFromWall || 60;
+        
+        // Get slope angle
+        const room = State.room;
+        const pitch = room.pitches[spec.name];
+        let cosAlpha = 1.0;
+        let slopeAngleRad = 0;
+        if (pitch && pitch.enabled) {
+            slopeAngleRad = Math.atan((room.height - pitch.kniestock) / pitch.run);
+            cosAlpha = Math.cos(slopeAngleRad);
+        }
+        
+        const sCenter = (elem.distanceFromWall || 0) + elem.h / 2;
+        const dCenterHoriz = sCenter * cosAlpha;
         
         // Offset coordinate inwards normal to wall
         let sx = coords.x;
         let sz = coords.y;
         
-        if (spec.name === 'top') sz += dist;
-        else if (spec.name === 'right') sx -= dist;
-        else if (spec.name === 'bottom') sz -= dist;
-        else if (spec.name === 'left') sx += dist;
+        if (spec.name === 'top') sz += dCenterHoriz;
+        else if (spec.name === 'right') sx -= dCenterHoriz;
+        else if (spec.name === 'bottom') sz -= dCenterHoriz;
+        else if (spec.name === 'left') sx += dCenterHoriz;
         
         const h = getCeilingHeightAt(sx, sz);
         
@@ -2166,7 +2227,6 @@ const Viewer3D = {
         const glass = new THREE.Mesh(glassGeo, glassMat);
         
         // White frame border
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0 });
         const frame = new THREE.LineSegments(
             new THREE.EdgesGeometry(new THREE.BoxGeometry(elem.w + 2, 2.5, elem.h + 2)),
             new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 })
@@ -2182,10 +2242,7 @@ const Viewer3D = {
         group.rotation.y = -spec.angle;
         
         // Tilt the skylight along pitch slope angle!
-        const room = State.room;
-        const pitch = room.pitches[spec.name];
         if (pitch && pitch.enabled) {
-            const slopeAngleRad = Math.atan((room.height - pitch.kniestock) / pitch.run);
             group.rotation.x = -slopeAngleRad; // tilt forward/backward
         }
         
