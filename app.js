@@ -762,13 +762,9 @@ const Editor2D = {
                 if (w === 'top') {
                     drawDimensionLine(ctx, seg.start, -offset, seg.end, -offset, text);
                 } else if (w === 'bottom') {
-                    const x1 = room.width - seg.start;
-                    const x2 = room.width - seg.end;
-                    drawDimensionLine(ctx, x1, room.depth + offset, x2, room.depth + offset, text);
+                    drawDimensionLine(ctx, seg.start, room.depth + offset, seg.end, room.depth + offset, text);
                 } else if (w === 'left') {
-                    const y1 = room.depth - seg.start;
-                    const y2 = room.depth - seg.end;
-                    drawDimensionLine(ctx, -offset, y1, -offset, y2, text);
+                    drawDimensionLine(ctx, -offset, seg.start, -offset, seg.end, text);
                 } else if (w === 'right') {
                     const y1 = seg.start;
                     const y2 = seg.end;
