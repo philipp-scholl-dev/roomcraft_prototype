@@ -2093,8 +2093,7 @@ const Viewer3D = {
             transparent: true,
             opacity: 0.4,
             roughness: 0.1,
-            transmission: 0.9,
-            thickness: 1.0
+            transmission: 0.9
         });
         const glass = new THREE.Mesh(glassGeo, glassMat);
         glass.position.set(0, midH, 0);

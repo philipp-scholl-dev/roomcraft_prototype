@@ -4,7 +4,7 @@
   "description": "Premium 2D/3D Room Planner",
   "main": "index.html",
   "scripts": {
-    "dev": "npx -y http-server -p 3000"
+    "dev": "npx -y http-server -p 3000 -c-1"
   },
   "dependencies": {},
   "devDependencies": {}
