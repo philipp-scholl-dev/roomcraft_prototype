@@ -427,6 +427,38 @@ function isMouseOverWallElement(elem, m) {
     return false;
 }
 
+// Checks if an element overlaps with any other element on the same wall
+function checkElementOverlap(item, wall, position) {
+    const pos = position !== undefined ? position : item.position;
+    const halfW = item.w / 2;
+    
+    const rangeStart = pos - halfW;
+    const rangeEnd = pos + halfW;
+    
+    for (let el of State.elements) {
+        if (el.id === item.id) continue;
+        if (el.wall !== wall) continue;
+        
+        if (item.type === 'skylight' && el.type === 'skylight') {
+            // Check 2D bounding box overlap for skylights on the slant
+            const dist1 = item.distanceFromWall || 60;
+            const dist2 = el.distanceFromWall || 60;
+            const halfH1 = item.h / 2;
+            const halfH2 = el.h / 2;
+            
+            const xOverlap = Math.max(rangeStart, el.position - el.w / 2) < Math.min(rangeEnd, el.position + el.w / 2);
+            const yOverlap = Math.max(dist1 - halfH1, dist2 - halfH2) < Math.min(dist1 + halfH1, dist2 + halfH2);
+            
+            if (xOverlap && yOverlap) return true;
+        } else if (item.type !== 'skylight' && el.type !== 'skylight') {
+            // Check 1D overlap along the wall for doors and windows
+            const overlap = Math.max(rangeStart, el.position - el.w / 2) < Math.min(rangeEnd, el.position + el.w / 2);
+            if (overlap) return true;
+        }
+    }
+    return false;
+}
+
 // Validates if a wall is suitable for a given element type and dimensions (preventing clipping with ceiling)
 function isValidWallForElement(item, wall, position) {
     const pos = position !== undefined ? position : item.position;
@@ -451,6 +483,11 @@ function isValidWallForElement(item, wall, position) {
         if (topY > ceilH) {
             return false; // collides with ceiling!
         }
+    }
+    
+    // 3. Check overlap with other elements on the same wall
+    if (checkElementOverlap(item, wall, pos)) {
+        return false;
     }
     
     return true;
@@ -2597,7 +2634,16 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-w', (e) => {
-        item.w = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(10, parseInt(e.target.value) || 0);
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, w: val };
+            if (!isValidWallForElement(temp, item.wall, item.position)) {
+                alert('Diese Breite führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
+                e.target.value = item.w;
+                return;
+            }
+        }
+        item.w = val;
         if (item.shape === 'circle') item.l = item.w; // sync circle diameter
         updateSelectedMesh();
     });
@@ -2627,7 +2673,16 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-pos', (e) => {
-        item.position = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseInt(e.target.value) || 0);
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, position: val };
+            if (!isValidWallForElement(temp, item.wall, val)) {
+                alert('Diese Position führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
+                e.target.value = item.position;
+                return;
+            }
+        }
+        item.position = val;
         updateSelectedMesh();
     });
     
@@ -2656,7 +2711,16 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-dist', (e) => {
-        item.distanceFromWall = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(10, parseInt(e.target.value) || 0);
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, distanceFromWall: val };
+            if (!isValidWallForElement(temp, item.wall, item.position)) {
+                alert('Diese Position führt zu einer Kollision mit einem anderen Element!');
+                e.target.value = item.distanceFromWall || 60;
+                return;
+            }
+        }
+        item.distanceFromWall = val;
         updateSelectedMesh();
     });
     
@@ -3279,7 +3343,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.1.2");
+    console.log("RoomCraft App loaded - Version 1.1.3");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
