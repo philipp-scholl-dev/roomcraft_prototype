@@ -151,6 +151,35 @@ class Vector2D {
     }
 }
 
+// Get closest wall and distance to it for a given furniture item (especially chimney/obstacle)
+function getClosestWall(f) {
+    const room = State.room;
+    
+    // Account for rotation to determine orientation of dimensions
+    const isRotated = (Math.round((f.rotation || 0) / 90) % 2 === 1);
+    const halfW = (isRotated ? f.l : f.w) / 2;
+    const halfL = (isRotated ? f.w : f.l) / 2;
+    
+    const dists = {
+        top: f.y - halfL,
+        bottom: room.depth - (f.y + halfL),
+        left: f.x - halfW,
+        right: room.width - (f.x + halfW)
+    };
+    
+    let closestWall = 'top';
+    let minDist = dists.top;
+    
+    for (let wall in dists) {
+        if (dists[wall] < minDist) {
+            minDist = dists[wall];
+            closestWall = wall;
+        }
+    }
+    
+    return { wall: closestWall, distance: minDist };
+}
+
 // Math helpers
 function getCeilingHeightAt(x, y) {
     const room = State.room;
@@ -676,23 +705,57 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
     ctx.restore();
 }
 
-// Computes sorted 1D segments along a wall (Corner -> Element -> Space -> Corner)
 function getWallSegments(wall) {
     const room = State.room;
     const wallElems = State.elements.filter(el => el.wall === wall);
-    if (wallElems.length === 0) return [];
+    const wallChimneys = State.furniture.filter(f => f.isObstacle && getClosestWall(f).wall === wall);
+    
+    if (wallElems.length === 0 && wallChimneys.length === 0) return [];
     
     const L = (wall === 'top' || wall === 'bottom') ? room.width : room.depth;
     
-    const footprints = wallElems.map(el => {
+    const footprints = [];
+    
+    // Add wall elements
+    wallElems.forEach(el => {
         const isReversed = (wall === 'bottom' || wall === 'left');
         const center = isReversed ? (L - el.position) : el.position;
-        return {
-            id: el.id,
-            start: center - el.w / 2,
-            end: center + el.w / 2,
-            w: el.w
-        };
+        const start = Math.max(0, Math.min(L, center - el.w / 2));
+        const end = Math.max(0, Math.min(L, center + el.w / 2));
+        if (start < end) {
+            footprints.push({
+                id: el.id,
+                start: start,
+                end: end,
+                w: end - start
+            });
+        }
+    });
+    
+    // Add chimneys
+    wallChimneys.forEach(f => {
+        const isRotated = (Math.round((f.rotation || 0) / 90) % 2 === 1);
+        let w, pos;
+        if (wall === 'top' || wall === 'bottom') {
+            w = isRotated ? f.l : f.w;
+            pos = f.x;
+        } else {
+            w = isRotated ? f.w : f.l;
+            pos = f.y;
+        }
+        
+        const isReversed = (wall === 'bottom' || wall === 'left');
+        const center = isReversed ? (L - pos) : pos;
+        const start = Math.max(0, Math.min(L, center - w / 2));
+        const end = Math.max(0, Math.min(L, center + w / 2));
+        if (start < end) {
+            footprints.push({
+                id: f.id,
+                start: start,
+                end: end,
+                w: end - start
+            });
+        }
     });
     
     footprints.sort((a, b) => a.start - b.start);
@@ -2821,6 +2884,18 @@ function buildPropertiesPanelContent() {
                         <span>🔒 Position sperren</span>
                     </label>
                 </div>
+                ${item.isObstacle ? (() => {
+                    const closest = getClosestWall(item);
+                    const wallNamesMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
+                    const wallName = wallNamesMap[closest.wall];
+                    const edgeDist = Math.max(0, Math.round(closest.distance));
+                    return `
+                        <div class="prop-field prop-span-2">
+                            <label>Abstand zur Wand ${wallName} (cm)</label>
+                            <input type="number" id="prop-wall-dist" value="${edgeDist}" min="0" ${lockedAttr}>
+                        </div>
+                    `;
+                })() : ''}
             </div>
             
             <div class="prop-actions">
@@ -3198,6 +3273,28 @@ function attachPropertiesListeners() {
             Editor2D.draw();
         });
     }
+
+    // Obstacle Wall Distance Input
+    listenChange('prop-wall-dist', (e) => {
+        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const closest = getClosestWall(item);
+        
+        const isRotated = (Math.round((item.rotation || 0) / 90) % 2 === 1);
+        const halfW = (isRotated ? item.l : item.w) / 2;
+        const halfL = (isRotated ? item.w : item.l) / 2;
+        
+        if (closest.wall === 'top') {
+            item.y = val + halfL;
+        } else if (closest.wall === 'bottom') {
+            item.y = State.room.depth - val - halfL;
+        } else if (closest.wall === 'left') {
+            item.x = val + halfW;
+        } else if (closest.wall === 'right') {
+            item.x = State.room.width - val - halfW;
+        }
+        
+        updateSelectedMesh();
+    });
 }
 
 function updateSelectedMesh() {
