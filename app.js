@@ -116,6 +116,21 @@ const History = {
         applyProjectData(nextState);
         
         this.updateButtons();
+    },
+    
+    updateButtons() {
+        const btnUndo = document.getElementById('btn-undo');
+        const btnRedo = document.getElementById('btn-redo');
+        if (btnUndo) {
+            btnUndo.disabled = this.undoStack.length === 0;
+            btnUndo.style.opacity = this.undoStack.length === 0 ? '0.4' : '1.0';
+            btnUndo.style.pointerEvents = this.undoStack.length === 0 ? 'none' : 'auto';
+        }
+        if (btnRedo) {
+            btnRedo.disabled = this.redoStack.length === 0;
+            btnRedo.style.opacity = this.redoStack.length === 0 ? '0.4' : '1.0';
+            btnRedo.style.pointerEvents = this.redoStack.length === 0 ? 'none' : 'auto';
+        }
     }
 };
 
