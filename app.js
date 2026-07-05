@@ -1253,7 +1253,7 @@ const Editor2D = {
             
             // Base styling based on status
             let fillColor = f.color || 'hsl(263, 50%, 40%)';
-            let strokeColor = isSelected ? 'white' : 'rgba(255, 255, 255, 0.4)';
+            let strokeColor = isSelected ? (f.locked ? 'hsl(215, 75%, 60%)' : 'white') : 'rgba(255, 255, 255, 0.4)';
             let strokeWidth = isSelected ? 2.5 : 1.2;
             
             if (f.isColliding) {
@@ -1327,7 +1327,11 @@ const Editor2D = {
             ctx.textBaseline = 'middle';
             
             // Rotate label text upright if upside down, or just keep relative
-            ctx.fillText(f.name || 'Möbel', 0, -4);
+            let nameText = f.name || 'Möbel';
+            if (f.locked) {
+                nameText = '🔒 ' + nameText;
+            }
+            ctx.fillText(nameText, 0, -4);
             ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
             ctx.font = '8px Outfit';
             ctx.fillText(`${f.w}x${f.l}x${f.h}`, 0, 8);
@@ -1342,6 +1346,7 @@ const Editor2D = {
     },
     
     drawSelectionHandles(ctx, f) {
+        if (f.locked) return;
         const halfW = f.w / 2;
         const halfL = f.l / 2;
         
@@ -1402,6 +1407,7 @@ const Editor2D = {
             const distRot = Math.hypot(m.x - rotHandleWorld.x, m.y - rotHandleWorld.y);
             
             if (distRot < 10) {
+                if (f.locked) return;
                 State.editor2D.dragMode = 'rotate';
                 State.editor2D.draggedItem = f;
                 State.editor2D.dragStartPos = { x: m.x, y: m.y };
@@ -1417,12 +1423,14 @@ const Editor2D = {
                 const bottomHandleWorld = new Vector2D(f.x + bottomHandleLocal.x, f.y + bottomHandleLocal.y);
                 
                 if (Math.hypot(m.x - rightHandleWorld.x, m.y - rightHandleWorld.y) < 8) {
+                    if (f.locked) return;
                     State.editor2D.dragMode = 'resize-w';
                     State.editor2D.draggedItem = f;
                     State.editor2D.initialItemState = { w: f.w, l: f.l, x: f.x, y: f.y };
                     return;
                 }
                 if (Math.hypot(m.x - bottomHandleWorld.x, m.y - bottomHandleWorld.y) < 8) {
+                    if (f.locked) return;
                     State.editor2D.dragMode = 'resize-l';
                     State.editor2D.draggedItem = f;
                     State.editor2D.initialItemState = { w: f.w, l: f.l, x: f.x, y: f.y };
@@ -1451,11 +1459,13 @@ const Editor2D = {
             
             if (clicked) {
                 selectItem(f, 'furniture');
-                State.editor2D.dragMode = 'move';
-                State.editor2D.draggedItem = f;
-                State.editor2D.dragStartPos = { x: f.x, y: f.y };
-                State.editor2D.dragOffset = { x: m.x - f.x, y: m.y - f.y };
-                State.editor2D.initialItemState = { x: f.x, y: f.y };
+                if (!f.locked) {
+                    State.editor2D.dragMode = 'move';
+                    State.editor2D.draggedItem = f;
+                    State.editor2D.dragStartPos = { x: f.x, y: f.y };
+                    State.editor2D.dragOffset = { x: m.x - f.x, y: m.y - f.y };
+                    State.editor2D.initialItemState = { x: f.x, y: f.y };
+                }
                 this.draw();
                 return;
             }
@@ -1465,8 +1475,10 @@ const Editor2D = {
         for (let elem of State.elements) {
             if (isMouseOverWallElement(elem, m)) {
                 selectItem(elem, 'element');
-                State.editor2D.dragMode = 'move-wall-item';
-                State.editor2D.draggedItem = elem;
+                if (!elem.locked) {
+                    State.editor2D.dragMode = 'move-wall-item';
+                    State.editor2D.draggedItem = elem;
+                }
                 this.draw();
                 return;
             }
@@ -1478,8 +1490,10 @@ const Editor2D = {
             const dist = Math.hypot(m.x - coords.x, m.y - coords.y);
             if (dist < 20) { // increased click radius for easier selection
                 selectItem(inst, 'installation');
-                State.editor2D.dragMode = 'move-wall-item';
-                State.editor2D.draggedItem = inst;
+                if (!inst.locked) {
+                    State.editor2D.dragMode = 'move-wall-item';
+                    State.editor2D.draggedItem = inst;
+                }
                 this.draw();
                 return;
             }
@@ -2731,6 +2745,7 @@ function buildPropertiesPanelContent() {
     if (!item || !container) return;
     
     let html = '';
+    const lockedAttr = item.locked ? 'disabled' : '';
     
     if (type === 'furniture') {
         const colors = [
@@ -2748,27 +2763,27 @@ function buildPropertiesPanelContent() {
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
                     <label>Name</label>
-                    <input type="text" id="prop-name" value="${item.name}">
+                    <input type="text" id="prop-name" value="${item.name}" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
-                    <input type="number" id="prop-w" value="${item.w}" min="10" max="500">
+                    <input type="number" id="prop-w" value="${item.w}" min="10" max="500" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Länge / Tiefe (cm)</label>
-                    <input type="number" id="prop-l" value="${item.l}" min="10" max="500" ${item.shape === 'circle' ? 'disabled' : ''}>
+                    <input type="number" id="prop-l" value="${item.l}" min="10" max="500" ${item.shape === 'circle' ? 'disabled' : lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Höhe (cm)</label>
-                    <input type="number" id="prop-h" value="${item.isObstacle ? Math.round(getCeilingHeightAt(item.x, item.y)) : item.h}" min="10" max="350" ${item.isObstacle ? 'disabled' : ''}>
+                    <input type="number" id="prop-h" value="${item.isObstacle ? Math.round(getCeilingHeightAt(item.x, item.y)) : item.h}" min="10" max="350" ${item.isObstacle ? 'disabled' : lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Rotation (Grad)</label>
-                    <input type="number" id="prop-rot" value="${item.rotation}" min="0" max="359">
+                    <input type="number" id="prop-rot" value="${item.rotation}" min="0" max="359" ${lockedAttr}>
                 </div>
                 <div class="prop-field prop-span-2">
                     <label>Farbe</label>
-                    <div class="color-palette">
+                    <div class="color-palette" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
                         ${colors.map(c => `
                             <div class="color-dot ${item.color === c ? 'active' : ''}" 
                                  style="background-color: ${c}" 
@@ -2779,18 +2794,25 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
                     <label class="checkbox-container">
-                        <input type="checkbox" id="prop-col" ${item.collisionEnabled ? 'checked' : ''}>
+                        <input type="checkbox" id="prop-col" ${item.collisionEnabled ? 'checked' : ''} ${lockedAttr}>
                         <span class="checkmark"></span>
                         <span>Kollisionsprüfung aktiv</span>
+                    </label>
+                </div>
+                <div class="prop-field prop-span-2" style="margin-top: 4px;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="prop-locked" ${item.locked ? 'checked' : ''}>
+                        <span class="checkmark"></span>
+                        <span>🔒 Position sperren</span>
                     </label>
                 </div>
             </div>
             
             <div class="prop-actions">
-                <button class="btn btn-secondary" id="prop-btn-duplicate">
+                <button class="btn btn-secondary" id="prop-btn-duplicate" ${lockedAttr}>
                     <i data-lucide="copy"></i> Duplizieren
                 </button>
-                <button class="btn btn-danger" id="prop-btn-delete">
+                <button class="btn btn-danger" id="prop-btn-delete" ${lockedAttr}>
                     <i data-lucide="trash-2"></i> Löschen
                 </button>
             </div>
@@ -2806,15 +2828,15 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
-                    <input type="number" id="prop-w" value="${item.w}" min="30" max="300">
+                    <input type="number" id="prop-w" value="${item.w}" min="30" max="300" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>${isSkylight ? 'Länge' : 'Höhe'} (cm)</label>
-                    <input type="number" id="prop-h" value="${item.h}" min="30" max="300">
+                    <input type="number" id="prop-h" value="${item.h}" min="30" max="300" ${lockedAttr}>
                 </div>
                 <div class="prop-field prop-span-2">
                     <label>Wand</label>
-                    <select id="prop-wall">
+                    <select id="prop-wall" ${lockedAttr}>
                         <option value="top" ${item.wall === 'top' ? 'selected' : ''}>Oben (Nord)</option>
                         <option value="right" ${item.wall === 'right' ? 'selected' : ''}>Rechts (Ost)</option>
                         <option value="bottom" ${item.wall === 'bottom' ? 'selected' : ''}>Unten (Süd)</option>
@@ -2823,28 +2845,28 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Abstand Links (cm)</label>
-                    <input type="number" id="prop-dist-left" value="${Math.round(item.position - item.w/2)}" min="0">
+                    <input type="number" id="prop-dist-left" value="${Math.round(item.position - item.w/2)}" min="0" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Rechts (cm)</label>
-                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - (item.position + item.w/2))}" min="0">
+                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - (item.position + item.w/2))}" min="0" ${lockedAttr}>
                 </div>
                 
                 ${isSkylight ? `
                     <div class="prop-field">
                         <label>Wandabstand (cm)</label>
-                        <input type="number" id="prop-dist" value="${item.distanceFromWall !== undefined ? item.distanceFromWall : 60}" min="0" max="300">
+                        <input type="number" id="prop-dist" value="${item.distanceFromWall !== undefined ? item.distanceFromWall : 60}" min="0" max="300" ${lockedAttr}>
                     </div>
                 ` : item.type === 'window' ? `
                     <div class="prop-field">
                         <label>Brüstungshöhe (cm)</label>
-                        <input type="number" id="prop-sill" value="${item.sillHeight || 90}" min="0" max="200">
+                        <input type="number" id="prop-sill" value="${item.sillHeight || 90}" min="0" max="200" ${lockedAttr}>
                     </div>
                 ` : (item.type === 'door' || item.type === 'double-door') ? `
                     ${item.type === 'door' ? `
                         <div class="prop-field">
                             <label>Anschlag</label>
-                            <select id="prop-hinge">
+                            <select id="prop-hinge" ${lockedAttr}>
                                 <option value="left" ${item.hinge === 'left' ? 'selected' : ''}>Links (Standard)</option>
                                 <option value="right" ${item.hinge === 'right' ? 'selected' : ''}>Rechts</option>
                             </select>
@@ -2852,16 +2874,23 @@ function buildPropertiesPanelContent() {
                     ` : ''}
                     <div class="prop-field">
                         <label>Öffnungsrichtung</label>
-                        <select id="prop-dir">
+                        <select id="prop-dir" ${lockedAttr}>
                             <option value="in" ${item.direction === 'in' ? 'selected' : ''}>Nach Innen</option>
                             <option value="out" ${item.direction === 'out' ? 'selected' : ''}>Nach Außen</option>
                         </select>
                     </div>
                 ` : ''}
+                <div class="prop-field prop-span-2" style="margin-top: 4px;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="prop-locked" ${item.locked ? 'checked' : ''}>
+                        <span class="checkmark"></span>
+                        <span>🔒 Position sperren</span>
+                    </label>
+                </div>
             </div>
             
             <div class="prop-actions">
-                <button class="btn btn-danger" id="prop-btn-delete" style="flex:1">
+                <button class="btn btn-danger" id="prop-btn-delete" style="flex:1" ${lockedAttr}>
                     <i data-lucide="trash-2"></i> Löschen
                 </button>
             </div>
@@ -2883,7 +2912,7 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Wand</label>
-                    <select id="prop-wall">
+                    <select id="prop-wall" ${lockedAttr}>
                         <option value="top" ${item.wall === 'top' ? 'selected' : ''}>Oben (Nord)</option>
                         <option value="right" ${item.wall === 'right' ? 'selected' : ''}>Rechts (Ost)</option>
                         <option value="bottom" ${item.wall === 'bottom' ? 'selected' : ''}>Unten (Süd)</option>
@@ -2892,20 +2921,27 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Höhe vom Boden (cm)</label>
-                    <input type="number" id="prop-height" value="${item.height || 30}" min="0" max="300">
+                    <input type="number" id="prop-height" value="${item.height || 30}" min="0" max="300" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Links (cm)</label>
-                    <input type="number" id="prop-dist-left" value="${Math.round(item.position)}" min="0">
+                    <input type="number" id="prop-dist-left" value="${Math.round(item.position)}" min="0" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Rechts (cm)</label>
-                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - item.position)}" min="0">
+                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - item.position)}" min="0" ${lockedAttr}>
+                </div>
+                <div class="prop-field prop-span-2" style="margin-top: 4px;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="prop-locked" ${item.locked ? 'checked' : ''}>
+                        <span class="checkmark"></span>
+                        <span>🔒 Position sperren</span>
+                    </label>
                 </div>
             </div>
             
             <div class="prop-actions">
-                <button class="btn btn-danger" id="prop-btn-delete" style="flex:1">
+                <button class="btn btn-danger" id="prop-btn-delete" style="flex:1" ${lockedAttr}>
                     <i data-lucide="trash-2"></i> Löschen
                 </button>
             </div>
@@ -3134,6 +3170,17 @@ function attachPropertiesListeners() {
             if (Viewer3D.renderer) Viewer3D.updateFurniture3D(copy);
             selectItem(copy, 'furniture');
             updatePlacedListsUI();
+        });
+    }
+
+    // Lock Position Checkbox
+    const lockChk = document.getElementById('prop-locked');
+    if (lockChk) {
+        lockChk.addEventListener('change', (e) => {
+            History.pushState();
+            item.locked = e.target.checked;
+            buildPropertiesPanelContent();
+            Editor2D.draw();
         });
     }
 }
