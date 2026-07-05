@@ -2742,7 +2742,7 @@ function buildPropertiesPanelContent() {
                 ${isSkylight ? `
                     <div class="prop-field">
                         <label>Wandabstand (cm)</label>
-                        <input type="number" id="prop-dist" value="${item.distanceFromWall || 60}" min="10" max="300">
+                        <input type="number" id="prop-dist" value="${item.distanceFromWall !== undefined ? item.distanceFromWall : 60}" min="0" max="300">
                     </div>
                 ` : item.type === 'window' ? `
                     <div class="prop-field">
@@ -2952,12 +2952,12 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-dist', (e) => {
-        const val = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseInt(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
             const temp = { ...item, distanceFromWall: val };
             if (!isValidWallForElement(temp, item.wall, item.position)) {
                 alert('Diese Position führt zu einer Kollision mit einem anderen Element!');
-                e.target.value = item.distanceFromWall || 60;
+                e.target.value = item.distanceFromWall !== undefined ? item.distanceFromWall : 60;
                 return;
             }
         }
@@ -3080,7 +3080,7 @@ function syncPropertiesPanel() {
         const w = item.w || 0;
         setVal('prop-dist-left', Math.round(item.position - w / 2));
         setVal('prop-dist-right', Math.round(maxPos - (item.position + w / 2)));
-        if (item.type === 'skylight') setVal('prop-dist', item.distanceFromWall || 60);
+        if (item.type === 'skylight') setVal('prop-dist', item.distanceFromWall !== undefined ? item.distanceFromWall : 60);
     }
 }
 
