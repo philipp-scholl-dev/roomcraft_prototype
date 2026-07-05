@@ -497,24 +497,40 @@ function isValidWallForElement(item, wall, position) {
 function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
     if (Math.abs(x1 - x2) < 0.1 && Math.abs(y1 - y2) < 0.1) return;
     
+    // Ensure we always draw from left-to-right, or if vertical, from top-to-bottom
+    let swap = false;
+    if (Math.abs(y1 - y2) < 0.1) {
+        if (x1 > x2) swap = true;
+    } else if (Math.abs(x1 - x2) < 0.1) {
+        if (y1 > y2) swap = true;
+    } else {
+        if (x1 > x2) swap = true;
+    }
+    
+    let drawX1 = x1, drawY1 = y1, drawX2 = x2, drawY2 = y2;
+    if (swap) {
+        drawX1 = x2; drawY1 = y2;
+        drawX2 = x1; drawY2 = y1;
+    }
+    
     ctx.save();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-    ctx.lineWidth = 0.8;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-    ctx.font = '8px Outfit, sans-serif';
+    ctx.strokeStyle = '#64748b'; // Slate-500
+    ctx.lineWidth = 1.0;
+    ctx.fillStyle = '#cbd5e1'; // Slate-300
+    ctx.font = '9px Outfit, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     
     // Draw main line
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
+    ctx.moveTo(drawX1, drawY1);
+    ctx.lineTo(drawX2, drawY2);
     ctx.stroke();
     
     // Draw architectural ticks (slanted lines at 45 degrees)
     const tickLen = 4;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-    ctx.lineWidth = 1.0;
+    ctx.strokeStyle = '#94a3b8'; // Slate-400
+    ctx.lineWidth = 1.2;
     
     const drawTick = (x, y) => {
         ctx.beginPath();
@@ -523,13 +539,13 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
         ctx.stroke();
     };
     
-    drawTick(x1, y1);
-    drawTick(x2, y2);
+    drawTick(drawX1, drawY1);
+    drawTick(drawX2, drawY2);
     
     // Draw Text
-    const midX = (x1 + x2) / 2;
-    const midY = (y1 + y2) / 2;
-    const angle = Math.atan2(y2 - y1, x2 - x1);
+    const midX = (drawX1 + drawX2) / 2;
+    const midY = (drawY1 + drawY2) / 2;
+    const angle = Math.atan2(drawY2 - drawY1, drawX2 - drawX1);
     
     ctx.translate(midX, midY);
     ctx.rotate(angle);
