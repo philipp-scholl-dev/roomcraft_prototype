@@ -493,6 +493,90 @@ function isValidWallForElement(item, wall, position) {
     return true;
 }
 
+// Helper to draw a single parallel dimension line with architectural ticks and centered text
+function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
+    if (Math.abs(x1 - x2) < 0.1 && Math.abs(y1 - y2) < 0.1) return;
+    
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+    ctx.lineWidth = 0.8;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.font = '8px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // Draw main line
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    
+    // Draw architectural ticks (slanted lines at 45 degrees)
+    const tickLen = 4;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 1.0;
+    
+    const drawTick = (x, y) => {
+        ctx.beginPath();
+        ctx.moveTo(x - tickLen, y + tickLen);
+        ctx.lineTo(x + tickLen, y - tickLen);
+        ctx.stroke();
+    };
+    
+    drawTick(x1, y1);
+    drawTick(x2, y2);
+    
+    // Draw Text
+    const midX = (x1 + x2) / 2;
+    const midY = (y1 + y2) / 2;
+    const angle = Math.atan2(y2 - y1, x2 - x1);
+    
+    ctx.translate(midX, midY);
+    ctx.rotate(angle);
+    ctx.fillText(text, 0, -6);
+    
+    ctx.restore();
+}
+
+// Computes sorted 1D segments along a wall (Corner -> Element -> Space -> Corner)
+function getWallSegments(wall) {
+    const room = State.room;
+    const wallElems = State.elements.filter(el => el.wall === wall);
+    if (wallElems.length === 0) return [];
+    
+    const L = (wall === 'top' || wall === 'bottom') ? room.width : room.depth;
+    
+    const footprints = wallElems.map(el => {
+        const isReversed = (wall === 'bottom' || wall === 'left');
+        const center = isReversed ? (L - el.position) : el.position;
+        return {
+            id: el.id,
+            start: center - el.w / 2,
+            end: center + el.w / 2,
+            w: el.w
+        };
+    });
+    
+    footprints.sort((a, b) => a.start - b.start);
+    
+    const segments = [];
+    let current = 0;
+    
+    footprints.forEach(fp => {
+        if (fp.start > current) {
+            segments.push({ start: current, end: fp.start, label: Math.round(fp.start - current) });
+        }
+        segments.push({ start: fp.start, end: fp.end, label: Math.round(fp.w), isElement: true });
+        current = fp.end;
+    });
+    
+    if (L > current) {
+        segments.push({ start: current, end: L, label: Math.round(L - current) });
+    }
+    
+    return segments;
+}
+
 // --- 2D EDITOR DRAWING ---
 const Editor2D = {
     canvas: null,
@@ -599,7 +683,49 @@ const Editor2D = {
         // 6. Draw Furniture
         this.drawFurniture(ctx);
         
+        // 7. Draw Dimensions & Chains
+        this.drawDimensions(ctx);
+        
         ctx.restore();
+    },
+    
+    drawDimensions(ctx) {
+        const room = State.room;
+        
+        // 1. Overall Room Dimensions (draw outer lines)
+        // Top wall overall width (Nord)
+        drawDimensionLine(ctx, 0, -38, room.width, -38, `${Math.round(room.width)} cm`);
+        // Left wall overall depth (West)
+        drawDimensionLine(ctx, -38, room.depth, -38, 0, `${Math.round(room.depth)} cm`);
+        
+        // 2. Wall Elements Dimension Chains (Maßketten)
+        const walls = ['top', 'right', 'bottom', 'left'];
+        walls.forEach(w => {
+            const segments = getWallSegments(w);
+            if (segments.length === 0) return;
+            
+            const offset = 22; // Offset outwards from wall line
+            
+            segments.forEach(seg => {
+                const text = `${seg.label}`;
+                
+                if (w === 'top') {
+                    drawDimensionLine(ctx, seg.start, -offset, seg.end, -offset, text);
+                } else if (w === 'bottom') {
+                    const x1 = room.width - seg.start;
+                    const x2 = room.width - seg.end;
+                    drawDimensionLine(ctx, x1, room.depth + offset, x2, room.depth + offset, text);
+                } else if (w === 'left') {
+                    const y1 = room.depth - seg.start;
+                    const y2 = room.depth - seg.end;
+                    drawDimensionLine(ctx, -offset, y1, -offset, y2, text);
+                } else if (w === 'right') {
+                    const y1 = seg.start;
+                    const y2 = seg.end;
+                    drawDimensionLine(ctx, room.width + offset, y1, room.width + offset, y2, text);
+                }
+            });
+        });
     },
     
     drawGrid(ctx) {
@@ -2505,6 +2631,7 @@ function buildPropertiesPanelContent() {
         `;
     } else if (type === 'element') {
         const isSkylight = item.type === 'skylight';
+        const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
         html = `
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
@@ -2519,7 +2646,7 @@ function buildPropertiesPanelContent() {
                     <label>${isSkylight ? 'Länge' : 'Höhe'} (cm)</label>
                     <input type="number" id="prop-h" value="${item.h}" min="30" max="300">
                 </div>
-                <div class="prop-field">
+                <div class="prop-field prop-span-2">
                     <label>Wand</label>
                     <select id="prop-wall">
                         <option value="top" ${item.wall === 'top' ? 'selected' : ''}>Oben (Nord)</option>
@@ -2529,8 +2656,12 @@ function buildPropertiesPanelContent() {
                     </select>
                 </div>
                 <div class="prop-field">
-                    <label>Wandposition (cm)</label>
-                    <input type="number" id="prop-pos" value="${item.position}" min="0">
+                    <label>Abstand Links (cm)</label>
+                    <input type="number" id="prop-dist-left" value="${Math.round(item.position - item.w/2)}" min="0">
+                </div>
+                <div class="prop-field">
+                    <label>Abstand Rechts (cm)</label>
+                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - (item.position + item.w/2))}" min="0">
                 </div>
                 
                 ${isSkylight ? `
@@ -2570,6 +2701,7 @@ function buildPropertiesPanelContent() {
             </div>
         `;
     } else if (type === 'installation') {
+        const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
         const typesMap = {
             socket: 'Steckdose',
             switch: 'Lichtschalter',
@@ -2593,12 +2725,16 @@ function buildPropertiesPanelContent() {
                     </select>
                 </div>
                 <div class="prop-field">
-                    <label>Wandposition (cm)</label>
-                    <input type="number" id="prop-pos" value="${item.position}" min="0">
-                </div>
-                <div class="prop-field">
                     <label>Höhe vom Boden (cm)</label>
                     <input type="number" id="prop-height" value="${item.height || 30}" min="0" max="300">
+                </div>
+                <div class="prop-field">
+                    <label>Abstand Links (cm)</label>
+                    <input type="number" id="prop-dist-left" value="${Math.round(item.position)}" min="0">
+                </div>
+                <div class="prop-field">
+                    <label>Abstand Rechts (cm)</label>
+                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - item.position)}" min="0">
                 </div>
             </div>
             
@@ -2672,18 +2808,48 @@ function attachPropertiesListeners() {
         updateSelectedMesh();
     });
     
-    listenChange('prop-pos', (e) => {
+    listenChange('prop-dist-left', (e) => {
         const val = Math.max(0, parseInt(e.target.value) || 0);
+        const w = item.w || 0;
+        const newPos = val + w / 2;
+        
         if (State.selectedItemType === 'element') {
-            const temp = { ...item, position: val };
-            if (!isValidWallForElement(temp, item.wall, val)) {
+            const temp = { ...item, position: newPos };
+            if (!isValidWallForElement(temp, item.wall, newPos)) {
                 alert('Diese Position führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
-                e.target.value = item.position;
+                e.target.value = Math.round(item.position - w / 2);
                 return;
             }
         }
-        item.position = val;
+        item.position = newPos;
         updateSelectedMesh();
+        
+        // Update distance right input field
+        const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
+        const rightInput = document.getElementById('prop-dist-right');
+        if (rightInput) rightInput.value = Math.round(maxPos - (newPos + w / 2));
+    });
+    
+    listenChange('prop-dist-right', (e) => {
+        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
+        const w = item.w || 0;
+        const newPos = maxPos - val - w / 2;
+        
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, position: newPos };
+            if (!isValidWallForElement(temp, item.wall, newPos)) {
+                alert('Diese Position führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
+                e.target.value = Math.round(maxPos - (item.position + w / 2));
+                return;
+            }
+        }
+        item.position = newPos;
+        updateSelectedMesh();
+        
+        // Update distance left input field
+        const leftInput = document.getElementById('prop-dist-left');
+        if (leftInput) leftInput.value = Math.round(newPos - w / 2);
     });
     
     listenChange('prop-sill', (e) => {
@@ -2835,7 +3001,10 @@ function syncPropertiesPanel() {
         setVal('prop-h', item.isObstacle ? getCeilingHeightAt(item.x, item.y) : item.h);
         setVal('prop-rot', item.rotation);
     } else {
-        setVal('prop-pos', item.position);
+        const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
+        const w = item.w || 0;
+        setVal('prop-dist-left', Math.round(item.position - w / 2));
+        setVal('prop-dist-right', Math.round(maxPos - (item.position + w / 2)));
         if (item.type === 'skylight') setVal('prop-dist', item.distanceFromWall || 60);
     }
 }
