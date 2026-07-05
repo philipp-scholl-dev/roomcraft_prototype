@@ -41,6 +41,84 @@ const State = {
     }
 };
 
+// --- UNDO / REDO HISTORY MANAGEMENT ---
+const History = {
+    undoStack: [],
+    redoStack: [],
+    tempSnapshot: null,
+    
+    // Create a deep copy of the relevant state
+    getSnapshot() {
+        return {
+            room: JSON.parse(JSON.stringify(State.room)),
+            furniture: JSON.parse(JSON.stringify(State.furniture)),
+            elements: JSON.parse(JSON.stringify(State.elements)),
+            installations: JSON.parse(JSON.stringify(State.installations))
+        };
+    },
+    
+    // Save current state to undo stack
+    pushState() {
+        const snapshot = this.getSnapshot();
+        
+        // Avoid duplicate consecutive states
+        if (this.undoStack.length > 0) {
+            const last = this.undoStack[this.undoStack.length - 1];
+            if (JSON.stringify(last) === JSON.stringify(snapshot)) {
+                return;
+            }
+        }
+        
+        this.undoStack.push(snapshot);
+        this.redoStack = [];
+        this.updateButtons();
+    },
+    
+    // Store a temporary snapshot before a potential drag/input change begins
+    saveTempSnapshot() {
+        this.tempSnapshot = this.getSnapshot();
+    },
+    
+    // Commit the temporary snapshot if the state actually changed
+    commitTempSnapshot() {
+        if (!this.tempSnapshot) return;
+        
+        const currentSnapshot = this.getSnapshot();
+        if (JSON.stringify(this.tempSnapshot) !== JSON.stringify(currentSnapshot)) {
+            this.undoStack.push(this.tempSnapshot);
+            this.redoStack = [];
+            this.updateButtons();
+        }
+        this.tempSnapshot = null;
+    },
+    
+    undo() {
+        if (this.undoStack.length === 0) return;
+        
+        // Push current state to redo stack
+        this.redoStack.push(this.getSnapshot());
+        
+        // Pop and apply prev state
+        const prevState = this.undoStack.pop();
+        applyProjectData(prevState);
+        
+        this.updateButtons();
+    },
+    
+    redo() {
+        if (this.redoStack.length === 0) return;
+        
+        // Push current state to undo stack
+        this.undoStack.push(this.getSnapshot());
+        
+        // Pop and apply next state
+        const nextState = this.redoStack.pop();
+        applyProjectData(nextState);
+        
+        this.updateButtons();
+    }
+};
+
 // --- DATA CLASS DEFINITIONS ---
 
 class Vector2D {
@@ -639,13 +717,26 @@ const Editor2D = {
         this.canvas.addEventListener('mouseup', e => this.handleMouseUp(e));
         this.canvas.addEventListener('wheel', e => this.handleWheel(e), { passive: false });
         
-        // Key listener for deletion
+        // Key listener for deletion and undo/redo
         window.addEventListener('keydown', e => {
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 // Only delete if we are not typing in an input
                 if (document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') {
                     this.deleteSelected();
                 }
+            }
+            
+            // Undo: Ctrl+Z or Cmd+Z
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                History.undo();
+            }
+            
+            // Redo: Ctrl+Y, Cmd+Y, or Ctrl+Shift+Z / Cmd+Shift+Z
+            if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') || 
+                ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')) {
+                e.preventDefault();
+                History.redo();
             }
         });
     },
@@ -1291,6 +1382,7 @@ const Editor2D = {
     
     // --- MOUSE & INTERACTION LOGIC ---
     handleMouseDown(e) {
+        History.saveTempSnapshot();
         const rect = this.canvas.getBoundingClientRect();
         const sx = e.clientX - rect.left;
         const sy = e.clientY - rect.top;
@@ -1566,6 +1658,7 @@ const Editor2D = {
         State.editor2D.dragMode = null;
         State.editor2D.draggedItem = null;
         this.draw();
+        History.commitTempSnapshot();
     },
     
     handleWheel(e) {
@@ -1668,6 +1761,7 @@ const Editor2D = {
     
     deleteSelected() {
         if (!State.selectedItem) return;
+        History.pushState();
         
         if (State.selectedItemType === 'furniture') {
             State.furniture = State.furniture.filter(item => item !== State.selectedItem);
@@ -2541,6 +2635,7 @@ function loadExampleRoom() {
 }
 
 function clearRoom() {
+    History.pushState();
     selectItem(null, null);
     State.furniture = [];
     State.elements = [];
@@ -3007,6 +3102,7 @@ function attachPropertiesListeners() {
     const dots = document.querySelectorAll('.color-dot');
     dots.forEach(dot => {
         dot.addEventListener('click', (e) => {
+            History.pushState();
             const col = e.target.dataset.color;
             item.color = col;
             
@@ -3031,6 +3127,7 @@ function attachPropertiesListeners() {
             copy.y += 20;
             copy.name = item.name + ' Kopie';
             
+            History.pushState();
             State.furniture.push(copy);
             CollisionEngine.updateAllCollisions();
             Editor2D.draw();
@@ -3276,6 +3373,7 @@ function initUIEvents() {
         }
         try {
             const data = JSON.parse(dataStr);
+            History.pushState();
             applyProjectData(data);
             showToast("Projekt erfolgreich geladen!");
         } catch (e) {
@@ -3312,6 +3410,7 @@ function initUIEvents() {
         reader.onload = (evt) => {
             try {
                 const data = JSON.parse(evt.target.result);
+                History.pushState();
                 applyProjectData(data);
                 showToast("Projekt erfolgreich importiert!");
                 fileInput.value = ''; // reset
@@ -3322,7 +3421,10 @@ function initUIEvents() {
         reader.readAsText(file);
     });
 
-    document.getElementById('btn-example-room').addEventListener('click', loadExampleRoom);
+    document.getElementById('btn-example-room').addEventListener('click', () => {
+        History.pushState();
+        loadExampleRoom();
+    });
     document.getElementById('btn-clear-room').addEventListener('click', clearRoom);
     
     document.getElementById('zoom-in').addEventListener('click', () => {
@@ -3367,6 +3469,7 @@ function initUIEvents() {
                 isColliding: false
             };
             
+            History.pushState();
             State.furniture.push(f);
             CollisionEngine.updateAllCollisions();
             Editor2D.draw();
@@ -3433,6 +3536,7 @@ function initUIEvents() {
                 elem.distanceFromWall = 60; // default distance along slant
             }
             
+            History.pushState();
             State.elements.push(elem);
             Editor2D.draw();
             if (Viewer3D.scene) {
@@ -3457,6 +3561,7 @@ function initUIEvents() {
                 height: type === 'socket' || type === 'lan' ? 30 : type === 'switch' ? 105 : 100 // default heights
             };
             
+            History.pushState();
             State.installations.push(inst);
             Editor2D.draw();
             if (Viewer3D.scene) {
@@ -3465,6 +3570,32 @@ function initUIEvents() {
             selectItem(inst, 'installation');
             updatePlacedListsUI();
         });
+    });
+
+    // Undo / Redo button event listeners
+    const undoBtn = document.getElementById('btn-undo');
+    const redoBtn = document.getElementById('btn-redo');
+    if (undoBtn) undoBtn.addEventListener('click', () => History.undo());
+    if (redoBtn) redoBtn.addEventListener('click', () => History.redo());
+
+    // Global history snapshotting on focus / input interactions
+    document.addEventListener('focusin', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
+            History.saveTempSnapshot();
+        }
+    });
+
+    document.addEventListener('mousedown', (e) => {
+        // Capture range sliders / checkboxes immediately on click
+        if (e.target.tagName === 'INPUT' && (e.target.type === 'range' || e.target.type === 'checkbox')) {
+            History.saveTempSnapshot();
+        }
+    });
+    
+    document.addEventListener('change', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') {
+            History.commitTempSnapshot();
+        }
     });
 }
 

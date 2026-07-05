@@ -843,6 +843,33 @@ body {
     color: white;
 }
 
+.toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.history-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tool-btn-icon {
+    flex: none !important;
+    width: 32px;
+    height: 32px;
+    padding: 0 !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.btn i, .tool-btn-icon i {
+    width: 16px;
+    height: 16px;
+}
+
 .toolbar-right {
     display: flex;
     align-items: center;
