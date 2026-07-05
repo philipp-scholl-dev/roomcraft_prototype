@@ -427,6 +427,27 @@ function isMouseOverWallElement(elem, m) {
     return false;
 }
 
+// Validates if a wall is suitable for a given element type and dimensions
+function isValidWallForElement(item, wall) {
+    const hasPitch = State.room.pitches[wall].enabled;
+    const kniestock = State.room.pitches[wall].kniestock;
+    
+    if (item.type === 'door' || item.type === 'double-door') {
+        return !hasPitch;
+    }
+    if (item.type === 'window') {
+        if (hasPitch) {
+            const sill = item.sillHeight !== undefined ? item.sillHeight : 90;
+            return (sill + item.h) <= kniestock;
+        }
+        return true;
+    }
+    if (item.type === 'skylight') {
+        return hasPitch;
+    }
+    return true;
+}
+
 // --- 2D EDITOR DRAWING ---
 const Editor2D = {
     canvas: null,
@@ -1251,15 +1272,36 @@ const Editor2D = {
         } else if (State.editor2D.dragMode === 'move-wall-item') {
             // Drag wall element or installation along walls
             const projection = projectToWall(m.x, m.y);
-            State.editor2D.draggedItem.wall = projection.wall;
             
+            let targetWall = projection.wall;
             let pos = projection.position;
+            
+            if (State.selectedItemType === 'element') {
+                const isValid = isValidWallForElement(State.editor2D.draggedItem, targetWall);
+                if (!isValid) {
+                    // Refuse to switch wall. Keep current wall and project mouse to it!
+                    targetWall = State.editor2D.draggedItem.wall;
+                    const room = State.room;
+                    if (targetWall === 'top') {
+                        pos = Math.max(0, Math.min(room.width, m.x));
+                    } else if (targetWall === 'right') {
+                        pos = Math.max(0, Math.min(room.depth, m.y));
+                    } else if (targetWall === 'bottom') {
+                        pos = Math.max(0, Math.min(room.width, room.width - m.x));
+                    } else { // left
+                        pos = Math.max(0, Math.min(room.depth, room.depth - m.y));
+                    }
+                }
+            }
+            
+            State.editor2D.draggedItem.wall = targetWall;
+            
             if (State.settings.gridEnabled) {
                 pos = Math.round(pos / 5) * 5; // snap to 5cm along walls
             }
             
             // Limit doors/windows from going off the wall edges
-            const maxPos = (projection.wall === 'top' || projection.wall === 'bottom') ? State.room.width : State.room.depth;
+            const maxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
             const halfW = (State.editor2D.draggedItem.w || 10) / 2;
             State.editor2D.draggedItem.position = Math.max(halfW, Math.min(maxPos - halfW, pos));
             
@@ -2549,7 +2591,16 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-h', (e) => {
-        item.h = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(10, parseInt(e.target.value) || 0);
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, h: val };
+            if (!isValidWallForElement(temp, item.wall)) {
+                alert('Diese Höhe überschreitet die Kniestockhöhe der Wand! Das Fenster würde in die Dachschräge ragen.');
+                e.target.value = item.h;
+                return;
+            }
+        }
+        item.h = val;
         updateSelectedMesh();
     });
     
@@ -2564,7 +2615,16 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-sill', (e) => {
-        item.sillHeight = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseInt(e.target.value) || 0);
+        if (State.selectedItemType === 'element') {
+            const temp = { ...item, sillHeight: val };
+            if (!isValidWallForElement(temp, item.wall)) {
+                alert('Diese Brüstungshöhe überschreitet die Kniestockhöhe der Wand! Das Fenster würde in die Dachschräge ragen.');
+                e.target.value = item.sillHeight !== undefined ? item.sillHeight : 90;
+                return;
+            }
+        }
+        item.sillHeight = val;
         updateSelectedMesh();
     });
     
@@ -2592,7 +2652,15 @@ function attachPropertiesListeners() {
     const wallSel = document.getElementById('prop-wall');
     if (wallSel) {
         wallSel.addEventListener('change', (e) => {
-            item.wall = e.target.value;
+            const newWall = e.target.value;
+            if (State.selectedItemType === 'element') {
+                if (!isValidWallForElement(item, newWall)) {
+                    alert('Dieses Element kann nicht auf diese Wand verschoben werden (inkompatibel mit Dachschräge).');
+                    e.target.value = item.wall;
+                    return;
+                }
+            }
+            item.wall = newWall;
             // Clamp position just in case
             const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
             const halfW = (item.w || 10) / 2;
@@ -2759,6 +2827,31 @@ function initUIEvents() {
         
         enableChk.addEventListener('change', (e) => {
             const active = e.target.checked;
+            
+            if (active) {
+                // Check if wall has incompatible elements (doors, double-doors, or windows that exceed kniestock)
+                const kniestockVal = parseInt(knieInput.value) || 80;
+                const incompatible = State.elements.filter(el => el.wall === w && (
+                    el.type === 'door' || 
+                    el.type === 'double-door' || 
+                    (el.type === 'window' && (el.sillHeight !== undefined ? el.sillHeight : 90) + el.h > kniestockVal)
+                ));
+                
+                if (incompatible.length > 0) {
+                    alert(`Die Dachschräge kann auf dieser Wand (${w === 'top' ? 'Nord' : w === 'bottom' ? 'Süd' : w === 'left' ? 'West' : 'Ost'}) nicht aktiviert werden, da sich darauf inkompatible Elemente (z.B. Türen oder hohe Fenster) befinden. Bitte verschieben oder löschen Sie diese zuerst.`);
+                    e.target.checked = false;
+                    return;
+                }
+            } else {
+                // Check if wall has skylights (which require slant!)
+                const skylights = State.elements.filter(el => el.wall === w && el.type === 'skylight');
+                if (skylights.length > 0) {
+                    alert(`Die Dachschräge kann auf dieser Wand (${w === 'top' ? 'Nord' : w === 'bottom' ? 'Süd' : w === 'left' ? 'West' : 'Ost'}) nicht deaktiviert werden, da sich darauf Dachfenster befinden. Bitte entfernen Sie diese zuerst.`);
+                    e.target.checked = true;
+                    return;
+                }
+            }
+            
             State.room.pitches[w].enabled = active;
             
             if (active) details.classList.remove('hidden');
@@ -2772,8 +2865,25 @@ function initUIEvents() {
             if (Viewer3D.renderer) Viewer3D.rebuildWalls3D();
         });
         
+        let prevKniestock = knieInput.value;
+        knieInput.addEventListener('focus', () => {
+            prevKniestock = knieInput.value;
+        });
+        
         const updateValues = () => {
-            State.room.pitches[w].kniestock = Math.max(0, parseInt(knieInput.value) || 0);
+            const newKniestock = Math.max(0, parseInt(knieInput.value) || 0);
+            if (State.room.pitches[w].enabled) {
+                // Check if any windows exceed this new Kniestock
+                const conflictingWindow = State.elements.find(el => el.wall === w && el.type === 'window' && (el.sillHeight !== undefined ? el.sillHeight : 90) + el.h > newKniestock);
+                if (conflictingWindow) {
+                    alert(`Der Kniestock kann nicht weiter verringert werden, da das Fenster an Position ${conflictingWindow.position}cm sonst in die Dachschräge ragen würde.`);
+                    knieInput.value = prevKniestock;
+                    return;
+                }
+            }
+            
+            prevKniestock = knieInput.value;
+            State.room.pitches[w].kniestock = newKniestock;
             State.room.pitches[w].run = Math.max(10, parseInt(runInput.value) || 10);
             
             CollisionEngine.updateAllCollisions();
@@ -2781,7 +2891,7 @@ function initUIEvents() {
             if (Viewer3D.renderer) Viewer3D.rebuildWalls3D();
         };
         
-        knieInput.addEventListener('input', updateValues);
+        knieInput.addEventListener('change', updateValues);
         runInput.addEventListener('input', updateValues);
     });
     
@@ -2956,25 +3066,26 @@ function initUIEvents() {
         btn.addEventListener('click', () => {
             const type = btn.dataset.type;
             
-            // Check if roof window is valid (need roof pitch enabled)
-            if (type === 'skylight') {
-                const pitchEnabled = walls.some(w => State.room.pitches[w].enabled);
-                if (!pitchEnabled) {
-                    alert('Aktivieren Sie zuerst eine Dachschräge unter "Raum"!');
-                    return;
-                }
-            }
+            // Determine a temporary element to check validity
+            const tempElem = {
+                type: type,
+                w: type === 'door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
+                h: type === 'door' || type === 'double-door' ? 200 : type === 'window' ? 120 : 120,
+                sillHeight: type === 'window' ? 90 : undefined
+            };
             
-            // Create default wall element on wall Top
-            // find wall that has roof pitch if adding skylight
-            let targetWall = 'top';
-            if (type === 'skylight') {
-                const pitchWall = walls.find(w => State.room.pitches[w].enabled);
-                if (pitchWall) targetWall = pitchWall;
-            } else {
-                // doors/windows typically go on walls without a pitch if knee-wall is low, 
-                // but let's just place on bottom wall initially as it has no pitches in our example
-                targetWall = 'bottom';
+            // Find a valid wall
+            const targetWall = walls.find(w => isValidWallForElement(tempElem, w));
+            
+            if (!targetWall) {
+                if (type === 'door' || type === 'double-door') {
+                    alert('Türen können nicht platziert werden, da alle Wände eine Dachschräge haben! Deaktivieren Sie zuerst eine Dachschräge.');
+                } else if (type === 'window') {
+                    alert('Fenster können nicht platziert werden, da der Kniestock an allen Dachschrägen zu niedrig ist (Mindestens 210cm benötigt für Standard-Fenster)!');
+                } else if (type === 'skylight') {
+                    alert('Aktivieren Sie zuerst eine Dachschräge unter "Raum"!');
+                }
+                return;
             }
             
             const maxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
@@ -2984,12 +3095,12 @@ function initUIEvents() {
                 type: type,
                 wall: targetWall,
                 position: maxPos / 2,
-                w: type === 'door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
-                h: type === 'door' || type === 'double-door' ? 200 : type === 'window' ? 120 : 120
+                w: tempElem.w,
+                h: tempElem.h
             };
             
             if (type === 'window') {
-                elem.sillHeight = 90;
+                elem.sillHeight = tempElem.sillHeight;
             } else if (type === 'skylight') {
                 elem.distanceFromWall = 60; // default distance along slant
             }
@@ -3147,7 +3258,7 @@ function updatePlacedListsUI() {
 
 // --- INITIALIZATION ---
 window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.1.0");
+    console.log("RoomCraft App loaded - Version 1.1.1");
     // 1. Initialize 2D Canvas Editor
     Editor2D.init();
     
