@@ -36,7 +36,8 @@ const State = {
         dragStartPos: { x: 0, y: 0 },
         dragOffset: { x: 0, y: 0 },
         initialItemState: null,
-        resizeHandleIndex: -1
+        resizeHandleIndex: -1,
+        hasManuallyPannedOrZoomed: false
     }
 };
 
@@ -630,8 +631,8 @@ const Editor2D = {
         this.canvas.style.height = wrapper.clientHeight + 'px';
         this.ctx.scale(dpr, dpr);
         
-        // Auto-center room
-        if (State.editor2D.zoom === 1.0 && State.editor2D.panX === 0) {
+        // Auto-center room if the user hasn't manually panned/zoomed yet
+        if (!State.editor2D.hasManuallyPannedOrZoomed) {
             this.resetView();
         } else {
             this.draw();
@@ -640,7 +641,7 @@ const Editor2D = {
     
     resetView() {
         const wrapper = this.canvas.parentElement;
-        const padding = 60; // pixels
+        const padding = 70; // pixels (increased to make sure dimensions are visible)
         const scaleX = (wrapper.clientWidth - padding * 2) / State.room.width;
         const scaleY = (wrapper.clientHeight - padding * 2) / State.room.depth;
         
@@ -1512,6 +1513,7 @@ const Editor2D = {
             
         } else if (State.editor2D.dragMode === 'pan') {
             // Pan canvas view
+            State.editor2D.hasManuallyPannedOrZoomed = true;
             const dx = sx - State.editor2D.dragStartPos.x;
             const dy = sy - State.editor2D.dragStartPos.y;
             State.editor2D.panX = State.editor2D.dragOffset.x + dx;
@@ -1528,6 +1530,7 @@ const Editor2D = {
     
     handleWheel(e) {
         e.preventDefault();
+        State.editor2D.hasManuallyPannedOrZoomed = true;
         const rect = this.canvas.getBoundingClientRect();
         const sx = e.clientX - rect.left;
         const sy = e.clientY - rect.top;
@@ -3271,16 +3274,19 @@ function initUIEvents() {
     document.getElementById('btn-clear-room').addEventListener('click', clearRoom);
     
     document.getElementById('zoom-in').addEventListener('click', () => {
+        State.editor2D.hasManuallyPannedOrZoomed = true;
         State.editor2D.zoom = Math.min(State.editor2D.zoom * 1.2, 4.0);
         Editor2D.draw();
     });
     
     document.getElementById('zoom-out').addEventListener('click', () => {
+        State.editor2D.hasManuallyPannedOrZoomed = true;
         State.editor2D.zoom = Math.max(State.editor2D.zoom / 1.2, 0.4);
         Editor2D.draw();
     });
     
     document.getElementById('zoom-reset').addEventListener('click', () => {
+        State.editor2D.hasManuallyPannedOrZoomed = false;
         Editor2D.resetView();
     });
     
