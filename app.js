@@ -181,6 +181,11 @@ function getClosestWall(f) {
 }
 
 // Math helpers
+function formatDim(val) {
+    if (val === undefined || val === null || isNaN(val)) return 0;
+    return Math.round(val * 10) / 10;
+}
+
 function getCeilingHeightAt(x, y) {
     const room = State.room;
     let minHeight = room.height;
@@ -765,14 +770,14 @@ function getWallSegments(wall) {
     
     footprints.forEach(fp => {
         if (fp.start > current) {
-            segments.push({ start: current, end: fp.start, label: Math.round(fp.start - current) });
+            segments.push({ start: current, end: fp.start, label: formatDim(fp.start - current) });
         }
-        segments.push({ start: fp.start, end: fp.end, label: Math.round(fp.w), isElement: true });
+        segments.push({ start: fp.start, end: fp.end, label: formatDim(fp.w), isElement: true });
         current = fp.end;
     });
     
     if (L > current) {
-        segments.push({ start: current, end: L, label: Math.round(L - current) });
+        segments.push({ start: current, end: L, label: formatDim(L - current) });
     }
     
     return segments;
@@ -913,9 +918,9 @@ const Editor2D = {
         
         // 1. Overall Room Dimensions (draw outer lines)
         // Top wall overall width (Nord)
-        drawDimensionLine(ctx, 0, -38, room.width, -38, `${Math.round(room.width)} cm`);
+        drawDimensionLine(ctx, 0, -38, room.width, -38, `${formatDim(room.width)} cm`);
         // Left wall overall depth (West)
-        drawDimensionLine(ctx, -38, room.depth, -38, 0, `${Math.round(room.depth)} cm`);
+        drawDimensionLine(ctx, -38, room.depth, -38, 0, `${formatDim(room.depth)} cm`);
         
         // 2. Wall Elements Dimension Chains (Maßketten)
         const walls = ['top', 'right', 'bottom', 'left'];
@@ -1412,7 +1417,7 @@ const Editor2D = {
             ctx.fillText(nameText, 0, -4);
             ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
             ctx.font = '8px Outfit';
-            ctx.fillText(`${f.w}x${f.l}x${f.h}`, 0, 8);
+            ctx.fillText(`${formatDim(f.w)}x${formatDim(f.l)}x${formatDim(f.h)}`, 0, 8);
             
             // Draw Handles if selected
             if (isSelected) {
@@ -2845,19 +2850,19 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
-                    <input type="number" id="prop-w" value="${item.w}" min="10" max="500" ${lockedAttr}>
+                    <input type="number" id="prop-w" value="${item.w}" min="10" max="500" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Länge / Tiefe (cm)</label>
-                    <input type="number" id="prop-l" value="${item.l}" min="10" max="500" ${item.shape === 'circle' ? 'disabled' : lockedAttr}>
+                    <input type="number" id="prop-l" value="${item.l}" min="10" max="500" step="0.1" ${item.shape === 'circle' ? 'disabled' : lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Höhe (cm)</label>
-                    <input type="number" id="prop-h" value="${item.isObstacle ? Math.round(getCeilingHeightAt(item.x, item.y)) : item.h}" min="10" max="350" ${item.isObstacle ? 'disabled' : lockedAttr}>
+                    <input type="number" id="prop-h" value="${item.isObstacle ? formatDim(getCeilingHeightAt(item.x, item.y)) : item.h}" min="10" max="350" step="0.1" ${item.isObstacle ? 'disabled' : lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Rotation (Grad)</label>
-                    <input type="number" id="prop-rot" value="${item.rotation}" min="0" max="359" ${lockedAttr}>
+                    <input type="number" id="prop-rot" value="${item.rotation}" min="0" max="359" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field prop-span-2">
                     <label>Farbe</label>
@@ -2888,11 +2893,11 @@ function buildPropertiesPanelContent() {
                     const closest = getClosestWall(item);
                     const wallNamesMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
                     const wallName = wallNamesMap[closest.wall];
-                    const edgeDist = Math.max(0, Math.round(closest.distance));
+                    const edgeDist = Math.max(0, formatDim(closest.distance));
                     return `
                         <div class="prop-field prop-span-2">
                             <label>Abstand zur Wand ${wallName} (cm)</label>
-                            <input type="number" id="prop-wall-dist" value="${edgeDist}" min="0" ${lockedAttr}>
+                            <input type="number" id="prop-wall-dist" value="${edgeDist}" min="0" step="0.1" ${lockedAttr}>
                         </div>
                     `;
                 })() : ''}
@@ -2918,11 +2923,11 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
-                    <input type="number" id="prop-w" value="${item.w}" min="30" max="300" ${lockedAttr}>
+                    <input type="number" id="prop-w" value="${item.w}" min="30" max="300" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>${isSkylight ? 'Länge' : 'Höhe'} (cm)</label>
-                    <input type="number" id="prop-h" value="${item.h}" min="30" max="300" ${lockedAttr}>
+                    <input type="number" id="prop-h" value="${item.h}" min="30" max="300" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field prop-span-2">
                     <label>Wand</label>
@@ -2935,22 +2940,22 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Abstand Links (cm)</label>
-                    <input type="number" id="prop-dist-left" value="${Math.round(item.position - item.w/2)}" min="0" ${lockedAttr}>
+                    <input type="number" id="prop-dist-left" value="${formatDim(item.position - item.w/2)}" min="0" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Rechts (cm)</label>
-                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - (item.position + item.w/2))}" min="0" ${lockedAttr}>
+                    <input type="number" id="prop-dist-right" value="${formatDim(maxPos - (item.position + item.w/2))}" min="0" step="0.1" ${lockedAttr}>
                 </div>
                 
                 ${isSkylight ? `
                     <div class="prop-field">
                         <label>Wandabstand (cm)</label>
-                        <input type="number" id="prop-dist" value="${item.distanceFromWall !== undefined ? item.distanceFromWall : 60}" min="0" max="300" ${lockedAttr}>
+                        <input type="number" id="prop-dist" value="${item.distanceFromWall !== undefined ? item.distanceFromWall : 60}" min="0" max="300" step="0.1" ${lockedAttr}>
                     </div>
                 ` : item.type === 'window' ? `
                     <div class="prop-field">
                         <label>Brüstungshöhe (cm)</label>
-                        <input type="number" id="prop-sill" value="${item.sillHeight || 90}" min="0" max="200" ${lockedAttr}>
+                        <input type="number" id="prop-sill" value="${item.sillHeight || 90}" min="0" max="200" step="0.1" ${lockedAttr}>
                     </div>
                 ` : (item.type === 'door' || item.type === 'double-door') ? `
                     ${item.type === 'door' ? `
@@ -3011,15 +3016,15 @@ function buildPropertiesPanelContent() {
                 </div>
                 <div class="prop-field">
                     <label>Höhe vom Boden (cm)</label>
-                    <input type="number" id="prop-height" value="${item.height || 30}" min="0" max="300" ${lockedAttr}>
+                    <input type="number" id="prop-height" value="${item.height || 30}" min="0" max="300" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Links (cm)</label>
-                    <input type="number" id="prop-dist-left" value="${Math.round(item.position)}" min="0" ${lockedAttr}>
+                    <input type="number" id="prop-dist-left" value="${formatDim(item.position)}" min="0" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field">
                     <label>Abstand Rechts (cm)</label>
-                    <input type="number" id="prop-dist-right" value="${Math.round(maxPos - item.position)}" min="0" ${lockedAttr}>
+                    <input type="number" id="prop-dist-right" value="${formatDim(maxPos - item.position)}" min="0" step="0.1" ${lockedAttr}>
                 </div>
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
                     <label class="checkbox-container">
@@ -3062,7 +3067,7 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-w', (e) => {
-        const val = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(10, parseFloat(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
             const temp = { ...item, w: val };
             if (!isValidWallForElement(temp, item.wall, item.position)) {
@@ -3077,12 +3082,12 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-l', (e) => {
-        item.l = Math.max(10, parseInt(e.target.value) || 0);
+        item.l = Math.max(10, parseFloat(e.target.value) || 0);
         updateSelectedMesh();
     });
     
     listenChange('prop-h', (e) => {
-        const val = Math.max(10, parseInt(e.target.value) || 0);
+        const val = Math.max(10, parseFloat(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
             const temp = { ...item, h: val };
             if (!isValidWallForElement(temp, item.wall, item.position)) {
@@ -3096,12 +3101,12 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-rot', (e) => {
-        item.rotation = (parseInt(e.target.value) || 0) % 360;
+        item.rotation = (parseFloat(e.target.value) || 0) % 360;
         updateSelectedMesh();
     });
     
     listenChange('prop-dist-left', (e) => {
-        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseFloat(e.target.value) || 0);
         const w = item.w || 0;
         const newPos = val + w / 2;
         
@@ -3109,7 +3114,7 @@ function attachPropertiesListeners() {
             const temp = { ...item, position: newPos };
             if (!isValidWallForElement(temp, item.wall, newPos)) {
                 alert('Diese Position führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
-                e.target.value = Math.round(item.position - w / 2);
+                e.target.value = formatDim(item.position - w / 2);
                 return;
             }
         }
@@ -3119,11 +3124,11 @@ function attachPropertiesListeners() {
         // Update distance right input field
         const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
         const rightInput = document.getElementById('prop-dist-right');
-        if (rightInput) rightInput.value = Math.round(maxPos - (newPos + w / 2));
+        if (rightInput) rightInput.value = formatDim(maxPos - (newPos + w / 2));
     });
     
     listenChange('prop-dist-right', (e) => {
-        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseFloat(e.target.value) || 0);
         const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
         const w = item.w || 0;
         const newPos = maxPos - val - w / 2;
@@ -3132,7 +3137,7 @@ function attachPropertiesListeners() {
             const temp = { ...item, position: newPos };
             if (!isValidWallForElement(temp, item.wall, newPos)) {
                 alert('Diese Position führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
-                e.target.value = Math.round(maxPos - (item.position + w / 2));
+                e.target.value = formatDim(maxPos - (item.position + w / 2));
                 return;
             }
         }
@@ -3141,11 +3146,11 @@ function attachPropertiesListeners() {
         
         // Update distance left input field
         const leftInput = document.getElementById('prop-dist-left');
-        if (leftInput) leftInput.value = Math.round(newPos - w / 2);
+        if (leftInput) leftInput.value = formatDim(newPos - w / 2);
     });
     
     listenChange('prop-sill', (e) => {
-        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseFloat(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
             const temp = { ...item, sillHeight: val };
             if (!isValidWallForElement(temp, item.wall, item.position)) {
@@ -3169,7 +3174,7 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-dist', (e) => {
-        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseFloat(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
             const temp = { ...item, distanceFromWall: val };
             if (!isValidWallForElement(temp, item.wall, item.position)) {
@@ -3183,7 +3188,7 @@ function attachPropertiesListeners() {
     });
     
     listenChange('prop-height', (e) => {
-        item.height = Math.max(0, parseInt(e.target.value) || 0);
+        item.height = Math.max(0, parseFloat(e.target.value) || 0);
         updateSelectedMesh();
     });
     
@@ -3276,7 +3281,7 @@ function attachPropertiesListeners() {
 
     // Obstacle Wall Distance Input
     listenChange('prop-wall-dist', (e) => {
-        const val = Math.max(0, parseInt(e.target.value) || 0);
+        const val = Math.max(0, parseFloat(e.target.value) || 0);
         const closest = getClosestWall(item);
         
         const isRotated = (Math.round((item.rotation || 0) / 90) % 2 === 1);
@@ -3319,7 +3324,7 @@ function syncPropertiesPanel() {
     
     const setVal = (id, val) => {
         const el = document.getElementById(id);
-        if (el) el.value = Math.round(val);
+        if (el) el.value = formatDim(val);
     };
     
     if (State.selectedItemType === 'furniture') {
@@ -3327,12 +3332,22 @@ function syncPropertiesPanel() {
         setVal('prop-l', item.l);
         setVal('prop-h', item.isObstacle ? getCeilingHeightAt(item.x, item.y) : item.h);
         setVal('prop-rot', item.rotation);
+        
+        if (item.isObstacle) {
+            const closest = getClosestWall(item);
+            setVal('prop-wall-dist', closest.distance);
+        }
     } else {
         const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
         const w = item.w || 0;
-        setVal('prop-dist-left', Math.round(item.position - w / 2));
-        setVal('prop-dist-right', Math.round(maxPos - (item.position + w / 2)));
-        if (item.type === 'skylight') setVal('prop-dist', item.distanceFromWall !== undefined ? item.distanceFromWall : 60);
+        if (State.selectedItemType === 'element') {
+            setVal('prop-dist-left', item.position - w / 2);
+            setVal('prop-dist-right', maxPos - (item.position + w / 2));
+            if (item.type === 'skylight') setVal('prop-dist', item.distanceFromWall !== undefined ? item.distanceFromWall : 60);
+        } else if (State.selectedItemType === 'installation') {
+            setVal('prop-dist-left', item.position);
+            setVal('prop-dist-right', maxPos - item.position);
+        }
     }
 }
 
@@ -3367,7 +3382,7 @@ function initUIEvents() {
         const num = document.getElementById(numId);
         
         const update = (val) => {
-            State.room[stateKey] = parseInt(val) || 200;
+            State.room[stateKey] = parseFloat(val) || 200;
             
             // Sync both fields
             range.value = val;
@@ -3440,11 +3455,11 @@ function initUIEvents() {
         });
         
         const updateValues = () => {
-            const newKniestock = Math.max(0, parseInt(knieInput.value) || 0);
+            const newKniestock = Math.max(0, parseFloat(knieInput.value) || 0);
             const prevKnieVal = State.room.pitches[w].kniestock;
             
             State.room.pitches[w].kniestock = newKniestock;
-            State.room.pitches[w].run = Math.max(10, parseInt(runInput.value) || 10);
+            State.room.pitches[w].run = Math.max(10, parseFloat(runInput.value) || 10);
             
             const conflict = State.elements.find(el => !isValidWallForElement(el, el.wall, el.position));
             if (conflict) {
