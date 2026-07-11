@@ -3877,6 +3877,30 @@ function selectItem(item, type) {
     }
 }
 
+function hslToHex(h, s, l) {
+    l /= 100;
+    const a = s * Math.min(l, 1 - l) / 100;
+    const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+function parseColorToHex(c) {
+    if (!c) return '#3b82f6';
+    if (c.startsWith('#')) return c;
+    const match = c.match(/hsl\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*\)/);
+    if (match) {
+        const h = parseInt(match[1]);
+        const s = parseInt(match[2]);
+        const l = parseInt(match[3]);
+        return hslToHex(h, s, l);
+    }
+    return '#3b82f6';
+}
+
 function buildPropertiesPanelContent() {
     const item = State.selectedItem;
     const type = State.selectedItemType;
@@ -3933,24 +3957,30 @@ function buildPropertiesPanelContent() {
                 ` : ''}
                 <div class="prop-field prop-span-2">
                     <label>Farbe (2D-Ansicht)</label>
-                    <div class="color-palette color-palette-2d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
-                        ${colors.map(c => `
-                            <div class="color-dot color-dot-2d ${item.color === c ? 'active' : ''}" 
-                                 style="background-color: ${c}" 
-                                 data-color="${c}">
-                            </div>
-                        `).join('')}
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="color-palette color-palette-2d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                            ${colors.map(c => `
+                                <div class="color-dot color-dot-2d ${item.color === c ? 'active' : ''}" 
+                                     style="background-color: ${c}" 
+                                     data-color="${c}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <input type="color" id="prop-color-2d-custom" value="${parseColorToHex(item.color)}" style="width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; padding: 0; background: transparent;" ${lockedAttr}>
                     </div>
                 </div>
                 <div class="prop-field prop-span-2">
                     <label>Farbe (3D-Ansicht)</label>
-                    <div class="color-palette color-palette-3d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
-                        ${colors.map(c => `
-                            <div class="color-dot color-dot-3d ${(item.color3d || item.color) === c ? 'active' : ''}" 
-                                 style="background-color: ${c}" 
-                                 data-color="${c}">
-                            </div>
-                        `).join('')}
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="color-palette color-palette-3d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                            ${colors.map(c => `
+                                <div class="color-dot color-dot-3d ${(item.color3d || item.color) === c ? 'active' : ''}" 
+                                     style="background-color: ${c}" 
+                                     data-color="${c}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <input type="color" id="prop-color-3d-custom" value="${parseColorToHex(item.color3d || item.color)}" style="width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; padding: 0; background: transparent;" ${lockedAttr}>
                     </div>
                 </div>
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
@@ -4361,6 +4391,45 @@ function attachPropertiesListeners() {
             updateSelectedMesh();
         });
     });
+    
+    // Custom color picker 2D
+    const picker2d = document.getElementById('prop-color-2d-custom');
+    if (picker2d) {
+        picker2d.addEventListener('input', (e) => {
+            const col = e.target.value;
+            item.color = col;
+            
+            // clear active dots
+            const dots2d = document.querySelectorAll('.color-dot-2d');
+            dots2d.forEach(d => d.classList.remove('active'));
+            
+            Editor2D.draw();
+            updateSelectedMesh();
+        });
+        
+        picker2d.addEventListener('change', () => {
+            History.pushState();
+        });
+    }
+    
+    // Custom color picker 3D
+    const picker3d = document.getElementById('prop-color-3d-custom');
+    if (picker3d) {
+        picker3d.addEventListener('input', (e) => {
+            const col = e.target.value;
+            item.color3d = col;
+            
+            // clear active dots
+            const dots3d = document.querySelectorAll('.color-dot-3d');
+            dots3d.forEach(d => d.classList.remove('active'));
+            
+            updateSelectedMesh();
+        });
+        
+        picker3d.addEventListener('change', () => {
+            History.pushState();
+        });
+    }
     
     // Actions
     const btnDel = document.getElementById('prop-btn-delete');
