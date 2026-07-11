@@ -323,6 +323,11 @@ const CollisionEngine = {
             return false;
         }
 
+        // Disable collision for carpets (they sit under furniture)
+        if (f1.isRug || f2.isRug) {
+            return false;
+        }
+
         // Vertical span overlap check
         const elev1 = f1.elevation || 0;
         const elev2 = f2.elevation || 0;
@@ -1410,7 +1415,7 @@ const Editor2D = {
     },
     
     drawFurniture(ctx) {
-        State.furniture.forEach(f => {
+        const drawItem = (f) => {
             const isSelected = State.selectedItem === f;
             
             ctx.save();
@@ -1431,6 +1436,12 @@ const Editor2D = {
             ctx.fillStyle = fillColor;
             ctx.strokeStyle = strokeColor;
             ctx.lineWidth = strokeWidth;
+            
+            if (f.isRug) {
+                // Draw rug with dashed outline and lower opacity
+                ctx.setLineDash([4, 3]);
+                ctx.globalAlpha = 0.8;
+            }
             
             // Draw Shape
             if (f.shape === 'circle') {
@@ -1462,13 +1473,11 @@ const Editor2D = {
                     const step = 15;
                     const limit = Math.max(f.w, f.l);
                     for (let k = -limit * 2; k < limit * 2; k += step) {
-                        // Line /
                         ctx.beginPath();
                         ctx.moveTo(k, -f.l / 2);
                         ctx.lineTo(k + f.l, f.l / 2);
                         ctx.stroke();
                         
-                        // Line \
                         ctx.beginPath();
                         ctx.moveTo(k, f.l / 2);
                         ctx.lineTo(k + f.l, -f.l / 2);
@@ -1480,7 +1489,7 @@ const Editor2D = {
                 ctx.strokeRect(-f.w / 2, -f.l / 2, f.w, f.l);
                 
                 // Draw face direction line (e.g. front of wardrobe/sofa)
-                if (!f.isObstacle) {
+                if (!f.isObstacle && !f.isRug) {
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
                     ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
                     
@@ -1510,7 +1519,6 @@ const Editor2D = {
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             
-            // Rotate label text upright if upside down, or just keep relative
             let nameText = f.name || 'Möbel';
             if (f.locked) {
                 nameText = '🔒 ' + nameText;
@@ -1522,10 +1530,22 @@ const Editor2D = {
             
             // Draw Handles if selected
             if (isSelected) {
+                ctx.globalAlpha = 1.0;
+                ctx.setLineDash([]);
                 this.drawSelectionHandles(ctx, f);
             }
             
             ctx.restore();
+        };
+
+        // Draw rugs first (so they sit below normal furniture)
+        State.furniture.forEach(f => {
+            if (f.isRug) drawItem(f);
+        });
+        
+        // Draw normal furniture next
+        State.furniture.forEach(f => {
+            if (!f.isRug) drawItem(f);
         });
     },
     
@@ -2246,6 +2266,65 @@ const TextureGenerator = {
         tex.wrapT = THREE.RepeatWrapping;
         tex.repeat.set(2, 2);
         return tex;
+    },
+    
+    createCarpetFlat(colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 128, 128);
+        
+        // Subtle linen/weave noise
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        for (let i = 0; i < 128; i += 2) {
+            ctx.fillRect(i, 0, 1, 128);
+            ctx.fillRect(0, i, 128, 1);
+        }
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+        for (let i = 1; i < 128; i += 2) {
+            ctx.fillRect(i, 0, 1, 128);
+            ctx.fillRect(0, i, 128, 1);
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(4, 4);
+        return tex;
+    },
+    
+    createCarpetShaggy(colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 256, 256);
+        
+        // Draw 3000 soft tuft fibers
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 3000; i++) {
+            const x = Math.random() * 256;
+            const y = Math.random() * 256;
+            const len = Math.random() * 6 + 3;
+            const angle = Math.random() * Math.PI * 2;
+            
+            const dark = Math.random() > 0.5;
+            ctx.strokeStyle = dark ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.1)';
+            
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+            ctx.stroke();
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(2, 2);
+        return tex;
     }
 };
 
@@ -2262,6 +2341,10 @@ const TextureCache = {
             tex = TextureGenerator.createBrick();
         } else if (type === 'fabric') {
             tex = TextureGenerator.createFabric(colorHex || '#A89F91');
+        } else if (type === 'carpet_flat') {
+            tex = TextureGenerator.createCarpetFlat(colorHex || '#d1d5db');
+        } else if (type === 'carpet_shaggy') {
+            tex = TextureGenerator.createCarpetShaggy(colorHex || '#e5e7eb');
         }
         
         if (tex) this.textures[key] = tex;
@@ -3246,9 +3329,36 @@ const Viewer3D = {
             return defaultMat;
         };
         
+        let rugMat;
+        if (f.isRug) {
+            const rugColor = f.color3d || f.color || 'hsl(215, 60%, 45%)';
+            const rugTexType = f.rugTexture === 'shaggy' ? 'carpet_shaggy' : 'carpet_flat';
+            const rugTex = TextureCache.get(rugTexType, rugColor);
+            rugMat = new THREE.MeshStandardMaterial({
+                map: rugTex,
+                roughness: f.rugTexture === 'shaggy' ? 1.0 : 0.8,
+                metalness: 0.0
+            });
+        }
+        
         const nameLower = f.name.toLowerCase();
         
-        if (isObstacle) {
+        if (f.isRug) {
+            // Teppich (Rug)
+            const thickness = f.h || 2;
+            let geo;
+            if (f.shape === 'circle') {
+                geo = new THREE.CylinderGeometry(f.w / 2, f.w / 2, thickness, 32);
+            } else {
+                geo = new THREE.BoxGeometry(f.w, thickness, f.l);
+            }
+            const mesh = new THREE.Mesh(geo, getMat(rugMat));
+            mesh.position.y = thickness / 2;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            group.add(mesh);
+            
+        } else if (isObstacle) {
             // Chimney / obstacle
             const rad = (f.rotation * Math.PI) / 180;
             const cos = Math.cos(rad);
@@ -3742,7 +3852,9 @@ const Presets = {
     'custom-rect': { name: 'Custom Box', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
     'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
     chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
-    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 }
+    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 },
+    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' },
+    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(142, 60%, 40%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' }
 };
 
 function loadExampleRoom() {
@@ -3988,6 +4100,15 @@ function buildPropertiesPanelContent() {
                         <input type="color" id="prop-color-3d-custom" value="${parseColorToHex(item.color3d || item.color)}" style="width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; padding: 0; background: transparent;" ${lockedAttr}>
                     </div>
                 </div>
+                ${item.isRug ? `
+                <div class="prop-field prop-span-2">
+                    <label>Teppich-Art</label>
+                    <select id="prop-rug-texture" ${lockedAttr}>
+                        <option value="flat" ${item.rugTexture === 'flat' ? 'selected' : ''}>Flachgewebe (Flach)</option>
+                        <option value="shaggy" ${item.rugTexture === 'shaggy' ? 'selected' : ''}>Hochflorig (Kuschelig)</option>
+                    </select>
+                </div>
+                ` : ''}
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
                     <label class="checkbox-container">
                         <input type="checkbox" id="prop-col" ${item.collisionEnabled ? 'checked' : ''} ${lockedAttr}>
@@ -4266,6 +4387,12 @@ function attachPropertiesListeners() {
         if (wInput) wInput.value = item.w;
         if (hInput) hInput.value = item.h;
         
+        updateSelectedMesh();
+    });
+    
+    listenChange('prop-rug-texture', (e) => {
+        History.pushState();
+        item.rugTexture = e.target.value;
         updateSelectedMesh();
     });
     
