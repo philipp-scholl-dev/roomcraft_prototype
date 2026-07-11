@@ -408,6 +408,54 @@ const CollisionEngine = {
     },
 
     updateAllCollisions() {
+        // Automatically calculate elevation for all TVs based on what is underneath them
+        State.furniture.forEach(f => {
+            const nameLower = (f.name || '').toLowerCase();
+            const isTV = nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined);
+            if (isTV) {
+                let highestSurface = 0;
+                State.furniture.forEach(o => {
+                    if (o === f) return; // skip self
+                    const oName = (o.name || '').toLowerCase();
+                    const oIsTV = oName.includes('tv') || oName.includes('fernseher') || (o.tvSize !== null && o.tvSize !== undefined);
+                    if (oIsTV) return; // skip other TVs
+                    
+                    // Translate and rotate f's center into o's local coordinates
+                    const dx = f.x - o.x;
+                    const dy = f.y - o.y;
+                    const rad = -(o.rotation * Math.PI) / 180;
+                    const cos = Math.cos(rad);
+                    const sin = Math.sin(rad);
+                    
+                    const lx = dx * cos - dy * sin;
+                    const ly = dx * sin + dy * cos;
+                    
+                    const halfW = o.w / 2;
+                    const halfL = o.shape === 'circle' ? o.w / 2 : o.l / 2;
+                    
+                    let inside = false;
+                    if (o.shape === 'circle') {
+                        inside = (lx * lx + ly * ly) <= halfW * halfW;
+                    } else {
+                        inside = (lx >= -halfW && lx <= halfW && ly >= -halfL && ly <= halfL);
+                    }
+                    
+                    if (inside) {
+                        const oElev = o.elevation || 0;
+                        const surface = oElev + o.h;
+                        if (surface > highestSurface) {
+                            highestSurface = surface;
+                        }
+                    }
+                });
+                
+                f.elevation = highestSurface;
+                if (Viewer3D.renderer) {
+                    Viewer3D.updateFurniture3D(f);
+                }
+            }
+        });
+
         if (!State.settings.collisionEnabled) {
             State.furniture.forEach(f => f.isColliding = false);
             return false;
@@ -1185,7 +1233,7 @@ const Editor2D = {
                     ctx.setLineDash([]);
                     
                     // Draw door leaves
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(38, 92%, 50%)';
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)');
                     ctx.lineWidth = 3.5;
                     
                     // Left leaf
@@ -2739,39 +2787,139 @@ const Viewer3D = {
         const dir = door.direction || 'in';
         const isIn = dir === 'in';
         
-        // Each leaf is half width
         const leafW = door.w / 2 - 2;
-        const leafGeo = new THREE.BoxGeometry(leafW, door.h - 4, 3);
-        const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+        const leafH = door.h - 4;
         
-        // 1. Left Leaf
-        const leafL = new THREE.Mesh(leafGeo, leafMat);
-        leafL.position.set(leafW / 2, (door.h - 4) / 2, 0);
-        const pivotL = new THREE.Group();
+        let pivotL = new THREE.Group();
         pivotL.position.set(-door.w / 2 + 2, 2, 0);
-        pivotL.add(leafL);
         
-        // 2. Right Leaf
-        const leafR = new THREE.Mesh(leafGeo, leafMat);
-        leafR.position.set(-leafW / 2, (door.h - 4) / 2, 0);
-        const pivotR = new THREE.Group();
+        let pivotR = new THREE.Group();
         pivotR.position.set(door.w / 2 - 2, 2, 0);
-        pivotR.add(leafR);
+        
+        if (door.isBalcony) {
+            // White Double Balcony Door (Glass with white frame)
+            const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xe2e8f0, // light glass color
+                transparent: true,
+                opacity: 0.25,
+                roughness: 0.1,
+                transmission: 0.95,
+                side: THREE.DoubleSide
+            });
+            
+            const buildBalconyLeaf = (w, h) => {
+                const leafGroup = new THREE.Group();
+                
+                // 1. Left border
+                const leftBarGeo = new THREE.BoxGeometry(4, h, 3);
+                const leftBar = new THREE.Mesh(leftBarGeo, whiteMat);
+                leftBar.position.set(-w / 2 + 2, h / 2, 0);
+                leftBar.castShadow = true;
+                leftBar.receiveShadow = true;
+                leafGroup.add(leftBar);
+                
+                // 2. Right border
+                const rightBarGeo = new THREE.BoxGeometry(4, h, 3);
+                const rightBar = new THREE.Mesh(rightBarGeo, whiteMat);
+                rightBar.position.set(w / 2 - 2, h / 2, 0);
+                rightBar.castShadow = true;
+                rightBar.receiveShadow = true;
+                leafGroup.add(rightBar);
+                
+                // 3. Top border
+                const topBarW = w - 8;
+                const topBarGeo = new THREE.BoxGeometry(topBarW, 4, 3);
+                const topBar = new THREE.Mesh(topBarGeo, whiteMat);
+                topBar.position.set(0, h - 2, 0);
+                topBar.castShadow = true;
+                topBar.receiveShadow = true;
+                leafGroup.add(topBar);
+                
+                // 4. Bottom board (taller)
+                const bottomBarGeo = new THREE.BoxGeometry(topBarW, 8, 3);
+                const bottomBar = new THREE.Mesh(bottomBarGeo, whiteMat);
+                bottomBar.position.set(0, 4, 0);
+                bottomBar.castShadow = true;
+                bottomBar.receiveShadow = true;
+                leafGroup.add(bottomBar);
+                
+                // 5. Middle crossbar
+                const midBarGeo = new THREE.BoxGeometry(topBarW, 3, 3);
+                const midBar = new THREE.Mesh(midBarGeo, whiteMat);
+                midBar.position.set(0, h / 2, 0);
+                midBar.castShadow = true;
+                midBar.receiveShadow = true;
+                leafGroup.add(midBar);
+                
+                // 6. Upper Glass pane
+                const glassUpperH = h / 2 - 5;
+                const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1);
+                const glassUpper = new THREE.Mesh(glassUpperGeo, glassMat);
+                glassUpper.position.set(0, h / 2 + 1.5 + glassUpperH / 2, 0);
+                leafGroup.add(glassUpper);
+                
+                // 7. Lower Glass pane
+                const glassLowerH = h / 2 - 7;
+                const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1);
+                const glassLower = new THREE.Mesh(glassLowerGeo, glassMat);
+                glassLower.position.set(0, 4 + glassLowerH / 2, 0);
+                leafGroup.add(glassLower);
+                
+                return leafGroup;
+            };
+            
+            const leafLGroup = buildBalconyLeaf(leafW, leafH);
+            leafLGroup.position.set(leafW / 2, 0, 0);
+            pivotL.add(leafLGroup);
+            
+            const leafRGroup = buildBalconyLeaf(leafW, leafH);
+            leafRGroup.position.set(-leafW / 2, 0, 0);
+            pivotR.add(leafRGroup);
+            
+            // Door Frame (white top beam)
+            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
+            const frameMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const frameTop = new THREE.Mesh(frameGeo, frameMat);
+            frameTop.position.set(0, door.h - 2, 0);
+            frameTop.castShadow = true;
+            frameTop.receiveShadow = true;
+            doorGroup.add(frameTop);
+            
+        } else {
+            // Standard Wooden Double Door
+            const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
+            const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+            
+            const leafL = new THREE.Mesh(leafGeo, leafMat);
+            leafL.position.set(leafW / 2, leafH / 2, 0);
+            leafL.castShadow = true;
+            leafL.receiveShadow = true;
+            pivotL.add(leafL);
+            
+            const leafR = new THREE.Mesh(leafGeo, leafMat);
+            leafR.position.set(-leafW / 2, leafH / 2, 0);
+            leafR.castShadow = true;
+            leafR.receiveShadow = true;
+            pivotR.add(leafR);
+            
+            // Door Frame (slate top beam)
+            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
+            const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
+            const frameTop = new THREE.Mesh(frameGeo, frameMat);
+            frameTop.position.set(0, door.h - 2, 0);
+            frameTop.castShadow = true;
+            frameTop.receiveShadow = true;
+            doorGroup.add(frameTop);
+        }
         
         // Rotate both open by 45 degrees
         let openAngle = Math.PI / 4;
         pivotL.rotation.y = isIn ? -openAngle : openAngle;
         pivotR.rotation.y = isIn ? openAngle : -openAngle;
         
-        // Door Frame (top beam)
-        const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
-        const frameTop = new THREE.Mesh(frameGeo, frameMat);
-        frameTop.position.set(0, door.h - 2, 0);
-        
         doorGroup.add(pivotL);
         doorGroup.add(pivotR);
-        doorGroup.add(frameTop);
         
         let dx = 0, dz = 0;
         const halfThick = 10 / 2; // wall thickness is 10

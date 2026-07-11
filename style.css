@@ -526,6 +526,34 @@ body {
     right: 0;
 }
 
+.double-balcony-door-preview {
+    background-color: rgba(139, 92, 246, 0.2);
+    border: 1.5px solid #ffffff;
+    position: relative;
+}
+
+.double-balcony-door-preview::before {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    border-radius: 50% 0 0 0;
+    top: -14px;
+    left: 0;
+}
+
+.double-balcony-door-preview::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    border-radius: 0 50% 0 0;
+    top: -14px;
+    right: 0;
+}
+
 .window-preview {
     background-color: hsl(199, 89%, 48%);
     border: 1px solid var(--text-primary);
