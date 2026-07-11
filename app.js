@@ -314,6 +314,17 @@ const CollisionEngine = {
     },
 
     checkFurnitureCollision(f1, f2) {
+        // Vertical span overlap check
+        const elev1 = f1.elevation || 0;
+        const elev2 = f2.elevation || 0;
+        const top1 = elev1 + f1.h;
+        const top2 = elev2 + f2.h;
+        
+        // No vertical overlap
+        if (top1 <= elev2 + 0.1 || top2 <= elev1 + 0.1) {
+            return false;
+        }
+        
         if (f1.shape === 'rect' && f2.shape === 'rect') {
             return this.checkOBBvsOBB(getFurnitureCorners(f1), getFurnitureCorners(f2));
         } else if (f1.shape === 'circle' && f2.shape === 'circle') {
@@ -351,11 +362,11 @@ const CollisionEngine = {
     },
 
     checkRoofPitchCollision(f) {
-        if (f.isObstacle) return false; // Obstacles automatically conform to the ceiling height and do not collide
+        if (f.isObstacle) return false;
         
-        // For a piece of furniture, check if its height exceeds the ceiling height at any footprint point
+        const totalHeight = (f.elevation || 0) + f.h;
+        
         if (f.shape === 'circle') {
-            // For a circle, check the center and 4 perimeter points
             const r = f.w / 2;
             const pointsToCheck = [
                 { x: f.x, y: f.y },
@@ -366,14 +377,12 @@ const CollisionEngine = {
             ];
             for (let p of pointsToCheck) {
                 const ceilH = getCeilingHeightAt(p.x, p.y);
-                if (f.h > ceilH) return true;
+                if (totalHeight > ceilH) return true;
             }
         } else {
-            // For a rectangle, check corners and center
             const corners = getFurnitureCorners(f);
-            corners.push(new Vector2D(f.x, f.y)); // add center
+            corners.push(new Vector2D(f.x, f.y));
             
-            // For long furniture, also check midpoint of edges
             if (corners.length >= 4) {
                 corners.push(new Vector2D((corners[0].x + corners[1].x) / 2, (corners[0].y + corners[1].y) / 2));
                 corners.push(new Vector2D((corners[1].x + corners[2].x) / 2, (corners[1].y + corners[2].y) / 2));
@@ -383,7 +392,7 @@ const CollisionEngine = {
 
             for (let p of corners) {
                 const ceilH = getCeilingHeightAt(p.x, p.y);
-                if (f.h > ceilH) return true;
+                if (totalHeight > ceilH) return true;
             }
         }
         return false;
@@ -1417,6 +1426,15 @@ const Editor2D = {
                 if (!f.isObstacle) {
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
                     ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
+                    
+                    const nameLower = f.name.toLowerCase();
+                    if (nameLower.includes('tv') || nameLower.includes('fernseher') || f.tvSize !== null) {
+                        ctx.fillStyle = '#0f172a';
+                        ctx.fillRect(-f.w / 2 + 5, -2, f.w - 10, 4);
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(-f.w / 2 + 5, -2, f.w - 10, 4);
+                    }
                 }
             }
             
@@ -2905,6 +2923,47 @@ const Viewer3D = {
             mesh.receiveShadow = true;
             group.add(mesh);
             
+        } else if (nameLower.includes('tv') || nameLower.includes('fernseher') || f.tvSize !== null) {
+            // TV / Fernseher
+            // 1. Base / Stand plate (metal or dark plastic)
+            const baseW = Math.min(f.w * 0.4, 40);
+            const baseL = Math.min(f.l, 20);
+            const baseH = 2;
+            const baseGeo = new THREE.BoxGeometry(baseW, baseH, baseL);
+            const baseMesh = new THREE.Mesh(baseGeo, getMat(metalMat));
+            baseMesh.position.y = baseH / 2;
+            baseMesh.castShadow = true;
+            baseMesh.receiveShadow = true;
+            group.add(baseMesh);
+            
+            // 2. Neck / Stand post (metal cylinder)
+            const neckH = 10;
+            const neckGeo = new THREE.CylinderGeometry(2, 2, neckH, 16);
+            const neckMesh = new THREE.Mesh(neckGeo, getMat(metalMat));
+            neckMesh.position.y = baseH + neckH / 2;
+            neckMesh.castShadow = true;
+            group.add(neckMesh);
+            
+            // 3. TV Bezel / Frame (slate-800 or black)
+            const bezelGeo = new THREE.BoxGeometry(f.w, f.h, 3);
+            const bezelMesh = new THREE.Mesh(bezelGeo, getMat(screenMat));
+            bezelMesh.position.y = baseH + neckH + f.h / 2;
+            bezelMesh.castShadow = true;
+            group.add(bezelMesh);
+            
+            // 4. Glossy Screen (inset on front face of the bezel)
+            const screenW = f.w - 2;
+            const screenH = f.h - 2;
+            const screenGeo = new THREE.BoxGeometry(screenW, screenH, 0.5);
+            const glassScreenMat = new THREE.MeshStandardMaterial({
+                color: 0x0f172a, // dark slate
+                roughness: 0.1,
+                metalness: 0.9
+            });
+            const screenMesh = new THREE.Mesh(screenGeo, getMat(glassScreenMat));
+            screenMesh.position.set(0, baseH + neckH + f.h / 2, 1.35); // slightly shifted forward to fit on bezel
+            group.add(screenMesh);
+            
         } else if (nameLower.includes('bett') || f.id.includes('bed')) {
             // Doppelbett (Double Bed)
             // 1. Frame base (wood)
@@ -3258,7 +3317,7 @@ const Viewer3D = {
         }
         
         // Position group
-        group.position.set(f.x + this.roomOffset.x, 0, f.y + this.roomOffset.z);
+        group.position.set(f.x + this.roomOffset.x, f.elevation || 0, f.y + this.roomOffset.z);
         group.rotation.y = -(f.rotation * Math.PI) / 180;
     },
     
@@ -3329,7 +3388,8 @@ const Presets = {
     table: { name: 'Esstisch', shape: 'rect', w: 160, l: 90, h: 76, color: 'hsl(35, 45%, 40%)', collisionEnabled: true },
     'custom-rect': { name: 'Custom Box', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
     'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
-    chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true }
+    chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
+    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 70, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 }
 };
 
 function loadExampleRoom() {
@@ -3512,6 +3572,16 @@ function buildPropertiesPanelContent() {
                     <label>Rotation (Grad)</label>
                     <input type="number" id="prop-rot" value="${item.rotation}" min="0" max="359" step="0.1" ${lockedAttr}>
                 </div>
+                <div class="prop-field">
+                    <label>Höhe über Boden (cm)</label>
+                    <input type="number" id="prop-elevation" value="${item.elevation || 0}" min="0" max="300" step="0.1" ${lockedAttr}>
+                </div>
+                ${item.tvSize !== null && item.tvSize !== undefined ? `
+                <div class="prop-field">
+                    <label>Größe (Zoll)</label>
+                    <input type="number" id="prop-tv-size" value="${item.tvSize}" min="10" max="150" step="1" ${lockedAttr}>
+                </div>
+                ` : ''}
                 <div class="prop-field prop-span-2">
                     <label>Farbe</label>
                     <div class="color-palette" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
@@ -3753,6 +3823,27 @@ function attachPropertiesListeners() {
         updateSelectedMesh();
     });
     
+    listenChange('prop-elevation', (e) => {
+        item.elevation = Math.max(0, parseFloat(e.target.value) || 0);
+        updateSelectedMesh();
+    });
+    
+    listenChange('prop-tv-size', (e) => {
+        const size = Math.max(10, parseInt(e.target.value) || 10);
+        item.tvSize = size;
+        
+        // 16:9 aspect ratio dimensions (w: size * 2.2138, h: size * 1.2453)
+        item.w = Math.round(size * 2.2138 * 10) / 10;
+        item.h = Math.round(size * 1.2453 * 10) / 10;
+        
+        const wInput = document.getElementById('prop-w');
+        const hInput = document.getElementById('prop-h');
+        if (wInput) wInput.value = item.w;
+        if (hInput) hInput.value = item.h;
+        
+        updateSelectedMesh();
+    });
+    
     listenChange('prop-dist-left', (e) => {
         const val = Math.max(0, parseFloat(e.target.value) || 0);
         const w = item.w || 0;
@@ -3980,6 +4071,12 @@ function syncPropertiesPanel() {
         setVal('prop-l', item.l);
         setVal('prop-h', item.isObstacle ? getCeilingHeightAt(item.x, item.y) : item.h);
         setVal('prop-rot', item.rotation);
+        setVal('prop-elevation', item.elevation || 0);
+        
+        if (item.tvSize !== null && item.tvSize !== undefined) {
+            const tvSizeEl = document.getElementById('prop-tv-size');
+            if (tvSizeEl) tvSizeEl.value = item.tvSize;
+        }
         
         if (item.isObstacle) {
             const closest = getClosestWall(item);
@@ -4288,7 +4385,9 @@ function initUIEvents() {
                 color: p.color,
                 collisionEnabled: p.collisionEnabled,
                 isObstacle: p.isObstacle || false,
-                isColliding: false
+                isColliding: false,
+                elevation: p.elevation || 0,
+                tvSize: p.tvSize !== undefined ? p.tvSize : null
             };
             
             History.pushState();
