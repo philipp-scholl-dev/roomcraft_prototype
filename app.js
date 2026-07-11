@@ -1628,27 +1628,87 @@ const Editor2D = {
             let deltaY = m.y - mStartY;
             
             if (e.shiftKey) {
-                // Slower precision movement (20% speed) and 0.1cm steps
+                // Slower precision movement (20% speed)
                 deltaX *= 0.2;
                 deltaY *= 0.2;
+            }
+            
+            let newX = State.editor2D.initialItemState.x + deltaX;
+            let newY = State.editor2D.initialItemState.y + deltaY;
+            
+            if (f.isObstacle) {
+                // Snap distance to closest wall
+                const tempItem = { ...f, x: newX, y: newY };
+                const closest = getClosestWall(tempItem);
                 
-                let newX = State.editor2D.initialItemState.x + deltaX;
-                let newY = State.editor2D.initialItemState.y + deltaY;
+                const isRotated = (Math.round((f.rotation || 0) / 90) % 2 === 1);
+                const halfW = (isRotated ? f.l : f.w) / 2;
+                const halfL = (isRotated ? f.w : f.l) / 2;
                 
-                f.x = Math.round(newX * 10) / 10;
-                f.y = Math.round(newY * 10) / 10;
-            } else {
-                let newX = State.editor2D.initialItemState.x + deltaX;
-                let newY = State.editor2D.initialItemState.y + deltaY;
-                
-                if (State.settings.gridEnabled) {
-                    const step = State.settings.gridSize;
-                    f.x = Math.round(newX / step) * step;
-                    f.y = Math.round(newY / step) * step;
+                let dist = closest.distance;
+                let step = 1;
+                if (e.shiftKey) {
+                    dist = Math.round(dist * 10) / 10;
+                } else if (State.settings.gridEnabled) {
+                    step = State.settings.gridSize;
+                    dist = Math.round(dist / step) * step;
                 } else {
-                    // Normal speed, exactly 1.0cm steps (integer rounded)
-                    f.x = Math.round(newX);
-                    f.y = Math.round(newY);
+                    dist = Math.round(dist);
+                }
+                
+                // Update position based on snapped distance
+                if (closest.wall === 'top') {
+                    f.y = dist + halfL;
+                    // Snap x coordinate directly
+                    if (e.shiftKey) {
+                        f.x = Math.round(newX * 10) / 10;
+                    } else if (State.settings.gridEnabled) {
+                        f.x = Math.round(newX / step) * step;
+                    } else {
+                        f.x = Math.round(newX);
+                    }
+                } else if (closest.wall === 'bottom') {
+                    f.y = State.room.depth - dist - halfL;
+                    if (e.shiftKey) {
+                        f.x = Math.round(newX * 10) / 10;
+                    } else if (State.settings.gridEnabled) {
+                        f.x = Math.round(newX / step) * step;
+                    } else {
+                        f.x = Math.round(newX);
+                    }
+                } else if (closest.wall === 'left') {
+                    f.x = dist + halfW;
+                    if (e.shiftKey) {
+                        f.y = Math.round(newY * 10) / 10;
+                    } else if (State.settings.gridEnabled) {
+                        f.y = Math.round(newY / step) * step;
+                    } else {
+                        f.y = Math.round(newY);
+                    }
+                } else if (closest.wall === 'right') {
+                    f.x = State.room.width - dist - halfW;
+                    if (e.shiftKey) {
+                        f.y = Math.round(newY * 10) / 10;
+                    } else if (State.settings.gridEnabled) {
+                        f.y = Math.round(newY / step) * step;
+                    } else {
+                        f.y = Math.round(newY);
+                    }
+                }
+            } else {
+                // Normal furniture
+                if (e.shiftKey) {
+                    f.x = Math.round(newX * 10) / 10;
+                    f.y = Math.round(newY * 10) / 10;
+                } else {
+                    if (State.settings.gridEnabled) {
+                        const step = State.settings.gridSize;
+                        f.x = Math.round(newX / step) * step;
+                        f.y = Math.round(newY / step) * step;
+                    } else {
+                        f.x = Math.round(newX);
+                        f.y = Math.round(newY);
+                    }
                 }
             }
             
@@ -1721,29 +1781,53 @@ const Editor2D = {
         } else if (State.editor2D.dragMode === 'move-wall-item') {
             // Drag wall element or installation along walls
             let targetWall, pos;
+            const item = State.editor2D.draggedItem;
+            const halfW = (item.w || 10) / 2;
+            const w = item.w || 10;
+            
             if (e.shiftKey) {
                 // Precision mode: keep on the starting wall, scale movement (20% speed) and 0.1cm steps
                 targetWall = State.editor2D.initialItemState.wall;
+                const maxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
                 
-                // Project current mouse position onto starting wall
                 const proj = projectToSpecificWall(m.x, m.y, targetWall);
                 let deltaPos = proj - State.editor2D.initialItemState.position;
-                
-                // Slow down
                 deltaPos *= 0.2;
                 
-                pos = State.editor2D.initialItemState.position + deltaPos;
-                pos = Math.round(pos * 10) / 10;
+                if (State.selectedItemType === 'element') {
+                    const initialDist = State.editor2D.initialItemState.position - halfW;
+                    let dist = initialDist + deltaPos;
+                    dist = Math.round(dist * 10) / 10;
+                    dist = Math.max(0, Math.min(maxPos - w, dist));
+                    pos = dist + halfW;
+                } else {
+                    // installation
+                    pos = State.editor2D.initialItemState.position + deltaPos;
+                    pos = Math.round(pos * 10) / 10;
+                }
             } else {
                 // Normal mode
                 const projection = projectToWall(m.x, m.y);
                 targetWall = projection.wall;
-                pos = projection.position;
+                const maxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
                 
-                if (State.settings.gridEnabled) {
-                    pos = Math.round(pos / 5) * 5; // snap to 5cm along walls
+                if (State.selectedItemType === 'element') {
+                    let dist = projection.position - halfW;
+                    if (State.settings.gridEnabled) {
+                        dist = Math.round(dist / 5) * 5; // snap to 5cm along walls
+                    } else {
+                        dist = Math.round(dist); // exactly 1.0cm steps
+                    }
+                    dist = Math.max(0, Math.min(maxPos - w, dist));
+                    pos = dist + halfW;
                 } else {
-                    pos = Math.round(pos); // exactly 1.0cm steps
+                    // installation
+                    pos = projection.position;
+                    if (State.settings.gridEnabled) {
+                        pos = Math.round(pos / 5) * 5; // snap to 5cm along walls
+                    } else {
+                        pos = Math.round(pos); // exactly 1.0cm steps
+                    }
                 }
             }
             
@@ -1753,6 +1837,7 @@ const Editor2D = {
                     // Refuse to switch wall. Keep current wall and project mouse to it!
                     targetWall = State.editor2D.draggedItem.wall;
                     const room = State.room;
+                    const wallMaxPos = (targetWall === 'top' || targetWall === 'bottom') ? room.width : room.depth;
                     let tempPos;
                     if (targetWall === 'top') {
                         tempPos = Math.max(0, Math.min(room.width, m.x));
@@ -1764,14 +1849,22 @@ const Editor2D = {
                         tempPos = Math.max(0, Math.min(room.depth, room.depth - m.y));
                     }
                     
-                    // Apply precision delta if Shift is pressed
+                    let tempDist = tempPos - halfW;
                     if (e.shiftKey) {
                         const proj = projectToSpecificWall(m.x, m.y, targetWall);
                         let deltaPos = proj - State.editor2D.initialItemState.position;
                         deltaPos *= 0.2;
-                        tempPos = State.editor2D.initialItemState.position + deltaPos;
-                        tempPos = Math.round(tempPos * 10) / 10;
+                        tempDist = (State.editor2D.initialItemState.position - halfW) + deltaPos;
+                        tempDist = Math.round(tempDist * 10) / 10;
+                    } else {
+                        if (State.settings.gridEnabled) {
+                            tempDist = Math.round(tempDist / 5) * 5;
+                        } else {
+                            tempDist = Math.round(tempDist);
+                        }
                     }
+                    tempDist = Math.max(0, Math.min(wallMaxPos - w, tempDist));
+                    tempPos = tempDist + halfW;
                     
                     // Also check if moving along the current wall is valid at this tempPos!
                     if (isValidWallForElement(State.editor2D.draggedItem, targetWall, tempPos)) {
@@ -1785,10 +1878,14 @@ const Editor2D = {
             
             State.editor2D.draggedItem.wall = targetWall;
             
-            // Limit doors/windows from going off the wall edges
-            const maxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
-            const halfW = (State.editor2D.draggedItem.w || 10) / 2;
-            State.editor2D.draggedItem.position = Math.max(halfW, Math.min(maxPos - halfW, pos));
+            // Limit doors/windows/installations from going off the wall edges
+            const limitMaxPos = (targetWall === 'top' || targetWall === 'bottom') ? State.room.width : State.room.depth;
+            if (State.selectedItemType === 'element') {
+                const dist = Math.max(0, Math.min(limitMaxPos - w, pos - halfW));
+                State.editor2D.draggedItem.position = dist + halfW;
+            } else {
+                State.editor2D.draggedItem.position = Math.max(5, Math.min(limitMaxPos - 5, pos));
+            }
             
             this.draw();
             syncPropertiesPanel();
