@@ -409,6 +409,34 @@
                 <!-- 3D Preview Panel -->
                 <div class="preview-pane" id="pane-3d">
                     <div class="threejs-wrapper">
+                        <!-- Sunlight Control Panel -->
+                        <div class="sun-control-panel">
+                            <div class="sun-panel-header">
+                                <i data-lucide="sun"></i>
+                                <span>Sonnenlicht</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="sun-enable" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+                            <div class="sun-panel-body" id="sun-controls-body">
+                                <div class="sun-input-group">
+                                    <div class="sun-label-row">
+                                        <label for="sun-angle">Ausrichtung</label>
+                                        <span id="sun-angle-val">45°</span>
+                                    </div>
+                                    <input type="range" id="sun-angle" min="0" max="360" value="45" step="1">
+                                </div>
+                                <div class="sun-input-group">
+                                    <div class="sun-label-row">
+                                        <label for="sun-elevation">Höhe (Winkel)</label>
+                                        <span id="sun-elevation-val">45°</span>
+                                    </div>
+                                    <input type="range" id="sun-elevation" min="5" max="90" value="45" step="1">
+                                </div>
+                            </div>
+                        </div>
+
                         <div id="threeCanvasContainer"></div>
                         <div class="three-controls-info">
                             <i data-lucide="info"></i> Links klick + Ziehen: Drehen | Rechts klick + Ziehen: Bewegen | Scrollen: Zoom

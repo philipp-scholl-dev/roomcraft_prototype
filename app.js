@@ -25,7 +25,10 @@ const State = {
         gridEnabled: true,
         gridSize: 10, // cm
         collisionEnabled: true,
-        viewMode: '2d' // '2d', '3d', 'split'
+        viewMode: '2d', // '2d', '3d', 'split'
+        sunEnabled: true,
+        sunAngle: 45, // degrees
+        sunElevation: 45 // degrees
     },
     editor2D: {
         zoom: 1.0,
@@ -2195,6 +2198,7 @@ const Viewer3D = {
     skylightMeshes: [],
     doorMeshes: [],
     windowMeshes: [],
+    sunLight: null,
     
     init() {
         this.container = document.getElementById('threeCanvasContainer');
@@ -2202,11 +2206,11 @@ const Viewer3D = {
         
         // Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x0e1320);
+        this.scene.background = new THREE.Color(0xf1f5f9); // slate-100
         
         // Camera setup
         this.camera = new THREE.PerspectiveCamera(45, this.container.clientWidth / this.container.clientHeight, 1, 3000);
-        this.camera.position.set(400, 450, 600);
+        this.camera.position.set(400, 500, 600);
         
         // Renderer setup
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -2227,19 +2231,21 @@ const Viewer3D = {
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
         
-        const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.6);
-        dirLight1.position.set(400, 600, 200);
-        dirLight1.castShadow = true;
-        dirLight1.shadow.mapSize.width = 2048;
-        dirLight1.shadow.mapSize.height = 2048;
-        dirLight1.shadow.camera.near = 10;
-        dirLight1.shadow.camera.far = 2000;
+        this.sunLight = new THREE.DirectionalLight(0xffffff, 0.75);
+        this.sunLight.castShadow = true;
+        this.sunLight.shadow.mapSize.width = 2048;
+        this.sunLight.shadow.mapSize.height = 2048;
+        this.sunLight.shadow.camera.near = 10;
+        this.sunLight.shadow.camera.far = 2000;
         const d = 500;
-        dirLight1.shadow.camera.left = -d;
-        dirLight1.shadow.camera.right = d;
-        dirLight1.shadow.camera.top = d;
-        dirLight1.shadow.camera.bottom = -d;
-        this.scene.add(dirLight1);
+        this.sunLight.shadow.camera.left = -d;
+        this.sunLight.shadow.camera.right = d;
+        this.sunLight.shadow.camera.top = d;
+        this.sunLight.shadow.camera.bottom = -d;
+        this.scene.add(this.sunLight);
+        this.scene.add(this.sunLight.target);
+        
+        this.updateSunLight();
 
         const dirLight2 = new THREE.DirectionalLight(0xa5b4fc, 0.2); // soft bluish fill light
         dirLight2.position.set(-400, 300, -300);
@@ -2260,6 +2266,27 @@ const Viewer3D = {
         this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    },
+    
+    updateSunLight() {
+        if (!this.sunLight) return;
+        
+        const enabled = State.settings.sunEnabled !== false;
+        this.sunLight.visible = enabled;
+        
+        if (enabled) {
+            const angleRad = (State.settings.sunAngle || 45) * Math.PI / 180;
+            const elevRad = (State.settings.sunElevation || 45) * Math.PI / 180;
+            
+            // Calculate direction vector (sun dome radius of 600cm)
+            const r = 600;
+            const x = r * Math.cos(elevRad) * Math.cos(angleRad);
+            const z = r * Math.cos(elevRad) * Math.sin(angleRad);
+            const y = r * Math.sin(elevRad);
+            
+            this.sunLight.position.set(x, y, z);
+            this.sunLight.target.position.set(0, 0, 0);
+        }
     },
     
     animate() {
@@ -4392,6 +4419,40 @@ function initUIEvents() {
             History.commitTempSnapshot();
         }
     });
+
+    // 10. Sunlight controls listeners
+    const sunEnable = document.getElementById('sun-enable');
+    const sunAngle = document.getElementById('sun-angle');
+    const sunElevation = document.getElementById('sun-elevation');
+    const sunControlsBody = document.getElementById('sun-controls-body');
+    const sunAngleVal = document.getElementById('sun-angle-val');
+    const sunElevationVal = document.getElementById('sun-elevation-val');
+    
+    if (sunEnable && sunAngle && sunElevation && sunControlsBody) {
+        sunEnable.addEventListener('change', (e) => {
+            State.settings.sunEnabled = e.target.checked;
+            if (e.target.checked) {
+                sunControlsBody.classList.remove('collapsed');
+            } else {
+                sunControlsBody.classList.add('collapsed');
+            }
+            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
+        });
+        
+        sunAngle.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            State.settings.sunAngle = val;
+            sunAngleVal.textContent = val + '°';
+            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
+        });
+        
+        sunElevation.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            State.settings.sunElevation = val;
+            sunElevationVal.textContent = val + '°';
+            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
+        });
+    }
 }
 
 function updateSkylightButtonState() {
@@ -4442,6 +4503,32 @@ function syncRoomInputsUI() {
     });
     
     updateSkylightButtonState();
+    syncSunControlsUI();
+}
+
+function syncSunControlsUI() {
+    const sunEnable = document.getElementById('sun-enable');
+    const sunAngle = document.getElementById('sun-angle');
+    const sunElevation = document.getElementById('sun-elevation');
+    const sunControlsBody = document.getElementById('sun-controls-body');
+    const sunAngleVal = document.getElementById('sun-angle-val');
+    const sunElevationVal = document.getElementById('sun-elevation-val');
+    
+    if (sunEnable && sunAngle && sunElevation && sunControlsBody) {
+        sunEnable.checked = State.settings.sunEnabled !== false;
+        sunAngle.value = State.settings.sunAngle || 45;
+        sunElevation.value = State.settings.sunElevation || 45;
+        sunAngleVal.textContent = (State.settings.sunAngle || 45) + '°';
+        sunElevationVal.textContent = (State.settings.sunElevation || 45) + '°';
+        
+        if (State.settings.sunEnabled !== false) {
+            sunControlsBody.classList.remove('collapsed');
+        } else {
+            sunControlsBody.classList.add('collapsed');
+        }
+        
+        if (Viewer3D.sunLight) Viewer3D.updateSunLight();
+    }
 }
 
 function updatePlacedListsUI() {
