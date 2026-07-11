@@ -2034,6 +2034,154 @@ const Editor2D = {
     }
 };
 
+// --- PROCEDURAL TEXTURES FOR 3D MODELS ---
+const TextureGenerator = {
+    createWood(colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 512, 512);
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+        for (let i = 0; i < 40; i++) {
+            const w = Math.random() * 20 + 5;
+            const y = Math.random() * 512;
+            ctx.fillRect(0, y, 512, w);
+        }
+        
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 300; i++) {
+            ctx.beginPath();
+            const y = Math.random() * 512;
+            ctx.moveTo(0, y);
+            ctx.bezierCurveTo(128, y + (Math.random() - 0.5) * 10, 384, y + (Math.random() - 0.5) * 10, 512, y);
+            ctx.stroke();
+        }
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+        for (let i = 0; i < 2; i++) {
+            const kx = Math.random() * 512;
+            const ky = Math.random() * 512;
+            const r = Math.random() * 15 + 10;
+            ctx.beginPath();
+            ctx.ellipse(kx, ky, r, r * 0.4, Math.random() * Math.PI, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+    
+    createBrick() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        const rows = 16;
+        const cols = 8;
+        const rh = 512 / rows;
+        const cw = 512 / cols;
+        const padding = 3;
+        
+        for (let r = 0; r < rows; r++) {
+            const offset = (r % 2) * (cw / 2);
+            for (let c = -1; c < cols + 1; c++) {
+                const x = c * cw + offset + padding;
+                const y = r * rh + padding;
+                const w = cw - padding * 2;
+                const h = rh - padding * 2;
+                
+                const tint = Math.floor(Math.random() * 20) - 10;
+                ctx.fillStyle = `rgb(${148 + tint}, ${163 + tint}, ${184 + tint})`;
+                ctx.fillRect(x, y, w, h);
+                
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                for (let i = 0; i < 5; i++) {
+                    ctx.fillRect(x + Math.random() * w, y + Math.random() * h, Math.random() * 4 + 2, Math.random() * 4 + 2);
+                }
+            }
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+    
+    createFabric(colorHex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 256, 256);
+        
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 256; i += 4) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0);
+            ctx.lineTo(i, 256);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(0, i);
+            ctx.lineTo(256, i);
+            ctx.stroke();
+        }
+        
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.04)';
+        for (let i = 2; i < 256; i += 4) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0);
+            ctx.lineTo(i, 256);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(0, i);
+            ctx.lineTo(256, i);
+            ctx.stroke();
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(2, 2);
+        return tex;
+    }
+};
+
+const TextureCache = {
+    textures: {},
+    get(type, colorHex) {
+        const key = type + '_' + (colorHex || '');
+        if (this.textures[key]) return this.textures[key];
+        
+        let tex;
+        if (type === 'wood') {
+            tex = TextureGenerator.createWood(colorHex || '#8B5A2B');
+        } else if (type === 'brick') {
+            tex = TextureGenerator.createBrick();
+        } else if (type === 'fabric') {
+            tex = TextureGenerator.createFabric(colorHex || '#A89F91');
+        }
+        
+        if (tex) this.textures[key] = tex;
+        return tex;
+    }
+};
+
 // --- 3D VIEWER (THREE.JS) ---
 const Viewer3D = {
     container: null,
@@ -2644,6 +2792,392 @@ const Viewer3D = {
         this.scene.add(this.ceilingMesh);
     },
     
+    buildDetailedFurniture(f, group, isColliding) {
+        const isObstacle = f.isObstacle || false;
+        const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
+        
+        // Default materials
+        const woodColor = f.color || 'hsl(33, 40%, 35%)';
+        const fabricColor = f.color || 'hsl(215, 60%, 45%)';
+        
+        const woodTex = TextureCache.get('wood', woodColor);
+        const fabricTex = TextureCache.get('fabric', fabricColor);
+        const brickTex = TextureCache.get('brick');
+        
+        const woodMat = new THREE.MeshStandardMaterial({
+            map: woodTex,
+            roughness: 0.7,
+            metalness: 0.1
+        });
+        
+        const fabricMat = new THREE.MeshStandardMaterial({
+            map: fabricTex,
+            roughness: 0.9,
+            metalness: 0.0
+        });
+        
+        const metalMat = new THREE.MeshStandardMaterial({
+            color: 0xcccccc,
+            roughness: 0.2,
+            metalness: 0.8
+        });
+        
+        const brickMat = new THREE.MeshStandardMaterial({
+            map: brickTex,
+            roughness: 0.8,
+            metalness: 0.1
+        });
+        
+        const whiteMat = new THREE.MeshStandardMaterial({
+            color: 0xf8fafc,
+            roughness: 0.9,
+            metalness: 0.0
+        });
+        
+        const screenMat = new THREE.MeshStandardMaterial({
+            color: 0x1e293b,
+            roughness: 0.1,
+            metalness: 0.9
+        });
+        
+        const getMat = (defaultMat) => {
+            if (isColliding) {
+                return new THREE.MeshStandardMaterial({
+                    color: 0xef4444,
+                    roughness: 0.4,
+                    metalness: 0.2,
+                    transparent: true,
+                    opacity: 0.8
+                });
+            }
+            return defaultMat;
+        };
+        
+        const nameLower = f.name.toLowerCase();
+        
+        if (isObstacle) {
+            // Chimney / obstacle
+            const rad = (f.rotation * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            const corners = [
+                { lx: -f.w/2, ly: -f.l/2 }, // NW
+                { lx: f.w/2, ly: -f.l/2 },  // NE
+                { lx: f.w/2, ly: f.l/2 },   // SE
+                { lx: -f.w/2, ly: f.l/2 }    // SW
+            ];
+            const heights = corners.map(c => {
+                const gx = f.x + c.lx * cos - c.ly * sin;
+                const gy = f.y + c.lx * sin + c.ly * cos;
+                return getCeilingHeightAt(gx, gy);
+            });
+            
+            const boxGeo = createSlantedBoxGeometry(f.w, f.l, heights[0], heights[1], heights[2], heights[3]);
+            const mesh = new THREE.Mesh(boxGeo, getMat(brickMat));
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            group.add(mesh);
+            
+        } else if (nameLower.includes('bett') || f.id.includes('bed')) {
+            // Doppelbett (Double Bed)
+            // 1. Frame base (wood)
+            const frameH = 15;
+            const frameGeo = new THREE.BoxGeometry(f.w, frameH, f.l);
+            const frameMesh = new THREE.Mesh(frameGeo, getMat(woodMat));
+            frameMesh.position.y = frameH / 2;
+            frameMesh.castShadow = true;
+            frameMesh.receiveShadow = true;
+            group.add(frameMesh);
+            
+            // 2. Headboard (wood)
+            const headH = f.h;
+            const headT = 6;
+            const headGeo = new THREE.BoxGeometry(f.w, headH, headT);
+            const headMesh = new THREE.Mesh(headGeo, getMat(woodMat));
+            headMesh.position.set(0, headH / 2, -f.l / 2 + headT / 2);
+            headMesh.castShadow = true;
+            headMesh.receiveShadow = true;
+            group.add(headMesh);
+            
+            // 3. Mattress (white fabric)
+            const mattH = 20;
+            const mattW = f.w - 8;
+            const mattL = f.l - headT - 4;
+            const mattGeo = new THREE.BoxGeometry(mattW, mattH, mattL);
+            const mattMesh = new THREE.Mesh(mattGeo, getMat(whiteMat));
+            mattMesh.position.set(0, frameH + mattH / 2, headT / 2);
+            mattMesh.castShadow = true;
+            mattMesh.receiveShadow = true;
+            group.add(mattMesh);
+            
+            // 4. Pillows (two small white boxes)
+            const pilW = mattW / 2 - 8;
+            const pilL = 25;
+            const pilH = 6;
+            const pilGeo = new THREE.BoxGeometry(pilW, pilH, pilL);
+            
+            const pilLMesh = new THREE.Mesh(pilGeo, getMat(whiteMat));
+            pilLMesh.position.set(-pilW / 2 - 2, frameH + mattH + pilH / 2, -mattL / 2 + pilL / 2 + headT + 2);
+            group.add(pilLMesh);
+            
+            const pilRMesh = new THREE.Mesh(pilGeo, getMat(whiteMat));
+            pilRMesh.position.set(pilW / 2 + 2, frameH + mattH + pilH / 2, -mattL / 2 + pilL / 2 + headT + 2);
+            group.add(pilRMesh);
+            
+            // 5. Blanket (colored fabric)
+            const blH = 21;
+            const blW = mattW + 2;
+            const blL = mattL * 0.65;
+            const blGeo = new THREE.BoxGeometry(blW, blH, blL);
+            const blMesh = new THREE.Mesh(blGeo, getMat(fabricMat));
+            blMesh.position.set(0, frameH + 0.5, blL / 2 - headT);
+            blMesh.castShadow = true;
+            blMesh.receiveShadow = true;
+            group.add(blMesh);
+            
+        } else if (nameLower.includes('schrank') || f.id.includes('wardrobe')) {
+            // Kleiderschrank (Wardrobe)
+            // 1. Main body (wood)
+            const bodyGeo = new THREE.BoxGeometry(f.w, f.h, f.l);
+            const bodyMesh = new THREE.Mesh(bodyGeo, getMat(woodMat));
+            bodyMesh.position.y = f.h / 2;
+            bodyMesh.castShadow = true;
+            bodyMesh.receiveShadow = true;
+            group.add(bodyMesh);
+            
+            // 2. Door slit line
+            const slitW = 1;
+            const slitGeo = new THREE.BoxGeometry(slitW, f.h - 10, 2);
+            const slitMesh = new THREE.Mesh(slitGeo, getMat(screenMat));
+            slitMesh.position.set(0, f.h / 2, f.l / 2 + 0.5);
+            group.add(slitMesh);
+            
+            // 3. Handles (metal)
+            const handH = 30;
+            const handGeo = new THREE.BoxGeometry(2, handH, 2);
+            const handL = new THREE.Mesh(handGeo, getMat(metalMat));
+            handL.position.set(-6, f.h / 2, f.l / 2 + 2);
+            group.add(handL);
+            
+            const handR = new THREE.Mesh(handGeo, getMat(metalMat));
+            handR.position.set(6, f.h / 2, f.l / 2 + 2);
+            group.add(handR);
+            
+        } else if (nameLower.includes('schreibtisch') || f.id.includes('desk')) {
+            // Schreibtisch (Desk)
+            // 1. Tabletop (wood)
+            const topH = 4;
+            const topGeo = new THREE.BoxGeometry(f.w, topH, f.l);
+            const topMesh = new THREE.Mesh(topGeo, getMat(woodMat));
+            topMesh.position.y = f.h - topH / 2;
+            topMesh.castShadow = true;
+            topMesh.receiveShadow = true;
+            group.add(topMesh);
+            
+            // 2. Legs (metal cylinders)
+            const legRadius = 2.5;
+            const legH = f.h - topH;
+            const legGeo = new THREE.CylinderGeometry(legRadius, legRadius, legH, 16);
+            const legOffsetW = f.w / 2 - 5;
+            const legOffsetL = f.l / 2 - 5;
+            const legPositions = [
+                { x: -legOffsetW, z: -legOffsetL },
+                { x: legOffsetW, z: -legOffsetL },
+                { x: -legOffsetW, z: legOffsetL },
+                { x: legOffsetW, z: legOffsetL }
+            ];
+            legPositions.forEach(pos => {
+                const legMesh = new THREE.Mesh(legGeo, getMat(metalMat));
+                legMesh.position.set(pos.x, legH / 2, pos.z);
+                legMesh.castShadow = true;
+                legMesh.receiveShadow = true;
+                group.add(legMesh);
+            });
+            
+            // 3. Drawer Cabinet
+            const cabW = 35;
+            const cabH = legH - 10;
+            const cabL = f.l - 10;
+            const cabGeo = new THREE.BoxGeometry(cabW, cabH, cabL);
+            const cabMesh = new THREE.Mesh(cabGeo, getMat(woodMat));
+            cabMesh.position.set(-f.w / 2 + cabW / 2 + 10, cabH / 2, 0);
+            cabMesh.castShadow = true;
+            cabMesh.receiveShadow = true;
+            group.add(cabMesh);
+            
+            // 4. Laptop
+            const lapW = 30;
+            const lapL = 20;
+            const lapGeo = new THREE.BoxGeometry(lapW, 1.0, lapL);
+            const lapMesh = new THREE.Mesh(lapGeo, getMat(metalMat));
+            lapMesh.position.set(10, f.h + 0.5, 5);
+            group.add(lapMesh);
+            
+            const screenGeo = new THREE.BoxGeometry(lapW, 15, 1.0);
+            const screenMesh = new THREE.Mesh(screenGeo, getMat(screenMat));
+            screenMesh.position.set(10, f.h + 8, -lapL / 2 + 5);
+            screenMesh.rotation.x = 0.2;
+            group.add(screenMesh);
+            
+        } else if (nameLower.includes('stuhl') || f.id.includes('chair')) {
+            // Stuhl (Chair)
+            const seatH = f.h * 0.53;
+            const seatT = 3;
+            
+            // 1. Seat
+            const seatGeo = new THREE.BoxGeometry(f.w, seatT, f.l);
+            const seatMesh = new THREE.Mesh(seatGeo, getMat(fabricMat));
+            seatMesh.position.y = seatH;
+            seatMesh.castShadow = true;
+            seatMesh.receiveShadow = true;
+            group.add(seatMesh);
+            
+            // 2. Backrest
+            const backH = f.h - seatH;
+            const backGeo = new THREE.BoxGeometry(f.w, backH, 3);
+            const backMesh = new THREE.Mesh(backGeo, getMat(fabricMat));
+            backMesh.position.set(0, seatH + backH / 2, -f.l / 2 + 1.5);
+            backMesh.castShadow = true;
+            backMesh.receiveShadow = true;
+            group.add(backMesh);
+            
+            // 3. Legs
+            const legGeo = new THREE.CylinderGeometry(1.5, 1.0, seatH, 8);
+            const legPositions = [
+                { x: -f.w / 2 + 3, z: -f.l / 2 + 3 },
+                { x: f.w / 2 - 3, z: -f.l / 2 + 3 },
+                { x: -f.w / 2 + 3, z: f.l / 2 - 3 },
+                { x: f.w / 2 - 3, z: f.l / 2 - 3 }
+            ];
+            legPositions.forEach(pos => {
+                const legMesh = new THREE.Mesh(legGeo, getMat(metalMat));
+                legMesh.position.set(pos.x, seatH / 2, pos.z);
+                legMesh.castShadow = true;
+                group.add(legMesh);
+            });
+            
+        } else if (nameLower.includes('sofa') || f.id.includes('sofa')) {
+            // Sofa
+            // 1. Base cushion
+            const baseH = 25;
+            const baseGeo = new THREE.BoxGeometry(f.w, baseH, f.l);
+            const baseMesh = new THREE.Mesh(baseGeo, getMat(fabricMat));
+            baseMesh.position.y = baseH / 2 + 5;
+            baseMesh.castShadow = true;
+            baseMesh.receiveShadow = true;
+            group.add(baseMesh);
+            
+            // 2. Backrest
+            const backH = f.h - 10;
+            const backT = 15;
+            const backGeo = new THREE.BoxGeometry(f.w, backH, backT);
+            const backMesh = new THREE.Mesh(backGeo, getMat(fabricMat));
+            backMesh.position.set(0, backH / 2 + 5, -f.l / 2 + backT / 2);
+            backMesh.castShadow = true;
+            backMesh.receiveShadow = true;
+            group.add(backMesh);
+            
+            // 3. Armrests
+            const armW = 15;
+            const armH = baseH + 15;
+            const armGeo = new THREE.BoxGeometry(armW, armH, f.l);
+            const armL = new THREE.Mesh(armGeo, getMat(fabricMat));
+            armL.position.set(-f.w / 2 + armW / 2, armH / 2 + 5, 0);
+            armL.castShadow = true;
+            armL.receiveShadow = true;
+            group.add(armL);
+            
+            const armR = new THREE.Mesh(armGeo, getMat(fabricMat));
+            armR.position.set(f.w / 2 - armW / 2, armH / 2 + 5, 0);
+            armR.castShadow = true;
+            armR.receiveShadow = true;
+            group.add(armR);
+            
+            // 4. Legs
+            const legGeo = new THREE.CylinderGeometry(2, 2, 5, 8);
+            const legPositions = [
+                { x: -f.w / 2 + 5, z: -f.l / 2 + 5 },
+                { x: f.w / 2 - 5, z: -f.l / 2 + 5 },
+                { x: -f.w / 2 + 5, z: f.l / 2 - 5 },
+                { x: f.w / 2 - 5, z: f.l / 2 - 5 }
+            ];
+            legPositions.forEach(pos => {
+                const legMesh = new THREE.Mesh(legGeo, getMat(metalMat));
+                legMesh.position.set(pos.x, 2.5, pos.z);
+                legMesh.castShadow = true;
+                group.add(legMesh);
+            });
+            
+        } else if (nameLower.includes('esstisch') || nameLower.includes('table') || f.id.includes('table')) {
+            // Esstisch (Dining Table) or Tisch (Table)
+            const topH = 4;
+            const topGeo = new THREE.BoxGeometry(f.w, topH, f.l);
+            const topMesh = new THREE.Mesh(topGeo, getMat(woodMat));
+            topMesh.position.y = f.h - topH / 2;
+            topMesh.castShadow = true;
+            topMesh.receiveShadow = true;
+            group.add(topMesh);
+            
+            // Legs
+            const legW = 6;
+            const legH = f.h - topH;
+            const legGeo = new THREE.BoxGeometry(legW, legH, legW);
+            const legPositions = [
+                { x: -f.w / 2 + legW / 2 + 2, z: -f.l / 2 + legW / 2 + 2 },
+                { x: f.w / 2 - legW / 2 - 2, z: -f.l / 2 + legW / 2 + 2 },
+                { x: -f.w / 2 + legW / 2 + 2, z: f.l / 2 - legW / 2 - 2 },
+                { x: f.w / 2 - legW / 2 - 2, z: f.l / 2 - legW / 2 - 2 }
+            ];
+            legPositions.forEach(pos => {
+                const legMesh = new THREE.Mesh(legGeo, getMat(woodMat));
+                legMesh.position.set(pos.x, legH / 2, pos.z);
+                legMesh.castShadow = true;
+                legMesh.receiveShadow = true;
+                group.add(legMesh);
+            });
+            
+            // Table runner
+            const runnerW = f.w * 0.3;
+            const runnerGeo = new THREE.BoxGeometry(runnerW, 0.5, f.l + 0.2);
+            const runnerMesh = new THREE.Mesh(runnerGeo, getMat(whiteMat));
+            runnerMesh.position.set(0, f.h + 0.25, 0);
+            group.add(runnerMesh);
+            
+        } else if (f.shape === 'circle') {
+            // Round table
+            const topH = 3;
+            const radius = f.w / 2;
+            
+            const topGeo = new THREE.CylinderGeometry(radius, radius, topH, 32);
+            const topMesh = new THREE.Mesh(topGeo, getMat(woodMat));
+            topMesh.position.y = f.h - topH / 2;
+            topMesh.castShadow = true;
+            topMesh.receiveShadow = true;
+            group.add(topMesh);
+            
+            const pedGeo = new THREE.CylinderGeometry(8, 8, f.h - topH, 16);
+            const pedMesh = new THREE.Mesh(pedGeo, getMat(woodMat));
+            pedMesh.position.y = (f.h - topH) / 2;
+            pedMesh.castShadow = true;
+            pedMesh.receiveShadow = true;
+            group.add(pedMesh);
+            
+            const basePlateGeo = new THREE.CylinderGeometry(radius * 0.5, radius * 0.5, 2, 24);
+            const basePlateMesh = new THREE.Mesh(basePlateGeo, getMat(metalMat));
+            basePlateMesh.position.y = 1;
+            group.add(basePlateMesh);
+            
+        } else {
+            // Custom rectangle block
+            const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
+            const mainMesh = new THREE.Mesh(boxGeo, getMat(woodMat));
+            mainMesh.position.y = heightVal / 2;
+            mainMesh.castShadow = true;
+            mainMesh.receiveShadow = true;
+            group.add(mainMesh);
+        }
+    },
+
     updateFurniture3D(f) {
         if (!this.scene) return;
         
@@ -2660,80 +3194,11 @@ const Viewer3D = {
             }
         }
         
-        // Create Mesh geometries based on properties
         const isObstacle = f.isObstacle || false;
         const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
         
-        let colorVal = f.isColliding ? 0xef4444 : (parseInt(f.color.replace(/[^0-9]/g, '')) || 0x8b5cf6);
-        if (isObstacle && !f.isColliding) {
-            colorVal = 0x334155; // match slate-700 wall color
-        }
-        
-        // Material
-        const mat = new THREE.MeshStandardMaterial({
-            color: colorVal,
-            roughness: isObstacle ? 0.8 : 0.5,
-            metalness: isObstacle ? 0.1 : 0.1
-        });
-        
-        if (f.isColliding) {
-            mat.color.setHex(0xef4444);
-            mat.roughness = 0.2;
-            mat.metalness = 0.5;
-        } else {
-            // Convert HSL color string to color
-            if (!isObstacle && f.color.startsWith('hsl')) {
-                // Parse e.g. "hsl(263, 70%, 55%)"
-                const parts = f.color.match(/\d+/g);
-                if (parts && parts.length >= 3) {
-                    const h = parseInt(parts[0]) / 360;
-                    const s = parseInt(parts[1]) / 100;
-                    const l = parseInt(parts[2]) / 100;
-                    mat.color.setHSL(h, s, l);
-                }
-            }
-        }
-        
-        let mesh;
-        if (f.shape === 'circle') {
-            const radius = f.w / 2;
-            const cylGeo = new THREE.CylinderGeometry(radius, radius, heightVal, 32);
-            mesh = new THREE.Mesh(cylGeo, mat);
-            mesh.position.y = heightVal / 2; // Sit on floor
-        } else {
-            // Rectangle
-            if (isObstacle) {
-                // Calculate height of the 4 corners to construct a slanted box geometry
-                const rad = (f.rotation * Math.PI) / 180;
-                const cos = Math.cos(rad);
-                const sin = Math.sin(rad);
-                
-                const corners = [
-                    { lx: -f.w/2, ly: -f.l/2 }, // NW
-                    { lx: f.w/2, ly: -f.l/2 },  // NE
-                    { lx: f.w/2, ly: f.l/2 },   // SE
-                    { lx: -f.w/2, ly: f.l/2 }    // SW
-                ];
-                
-                const heights = corners.map(c => {
-                    const gx = f.x + c.lx * cos - c.ly * sin;
-                    const gy = f.y + c.lx * sin + c.ly * cos;
-                    return getCeilingHeightAt(gx, gy);
-                });
-                
-                const boxGeo = createSlantedBoxGeometry(f.w, f.l, heights[0], heights[1], heights[2], heights[3]);
-                mesh = new THREE.Mesh(boxGeo, mat);
-                mesh.position.y = 0; // Sit on floor (origin is already at bottom Y = 0!)
-            } else {
-                const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
-                mesh = new THREE.Mesh(boxGeo, mat);
-                mesh.position.y = heightVal / 2; // Sit on floor
-            }
-        }
-        
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        group.add(mesh);
+        // Build the detailed parts
+        this.buildDetailedFurniture(f, group, f.isColliding);
         
         // Draw selected indicators in 3D
         if (State.selectedItem === f) {
