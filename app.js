@@ -2791,12 +2791,81 @@ const Viewer3D = {
         // Render slanted ceiling surfaces as a unified parametric grid mesh
         const room = State.room;
         const offset = this.roomOffset;
+        
+        // Create an alpha map to cut out holes for skylights in the ceiling geometry
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        // Fill with white (solid ceiling)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        // Fill black for skylight footprints
+        ctx.fillStyle = '#000000';
+        
+        const skylights = State.elements.filter(el => el.type === 'skylight');
+        skylights.forEach(elem => {
+            const spec = {
+                top: { name: 'top', startX: 0, startZ: 0, angle: 0, length: room.width },
+                right: { name: 'right', startX: room.width, startZ: 0, angle: Math.PI / 2, length: room.depth },
+                bottom: { name: 'bottom', startX: room.width, startZ: room.depth, angle: Math.PI, length: room.width },
+                left: { name: 'left', startX: 0, startZ: room.depth, angle: -Math.PI / 2, length: room.depth }
+            }[elem.wall];
+            
+            if (!spec) return;
+            
+            const coords = getWallCoordinates(spec.name, elem.position);
+            const pitch = room.pitches[spec.name];
+            const run = (pitch && pitch.enabled) ? pitch.run : 100;
+            const kniestock = (pitch && pitch.enabled) ? pitch.kniestock : 100;
+            const wallH = room.height;
+            
+            const slopeLen = Math.sqrt(run * run + (wallH - kniestock) * (wallH - kniestock));
+            const cosAlpha = run / slopeLen;
+            
+            const distFromWall = elem.distanceFromWall !== undefined ? elem.distanceFromWall : 60;
+            const sCenter = distFromWall + elem.h / 2;
+            const dCenterHoriz = sCenter * cosAlpha;
+            
+            let sx = coords.x;
+            let sz = coords.y;
+            
+            if (spec.name === 'top') sz += dCenterHoriz;
+            else if (spec.name === 'right') sx -= dCenterHoriz;
+            else if (spec.name === 'bottom') sz -= dCenterHoriz;
+            else if (spec.name === 'left') sx += dCenterHoriz;
+            
+            let wX = elem.w;
+            let dZ = elem.h * cosAlpha;
+            
+            if (spec.name === 'left' || spec.name === 'right') {
+                wX = elem.h * cosAlpha;
+                dZ = elem.w;
+            }
+            
+            const xMin = sx - wX / 2;
+            const zMin = sz - dZ / 2;
+            
+            const cx = (xMin / room.width) * 512;
+            const cz = (zMin / room.depth) * 512;
+            const cw = (wX / room.width) * 512;
+            const ch = (dZ / room.depth) * 512;
+            
+            ctx.fillRect(cx, cz, cw, ch);
+        });
+        
+        const alphaMap = new THREE.CanvasTexture(canvas);
+        
         const wallMat = new THREE.MeshStandardMaterial({
             color: 0x475569, // slate-600
             transparent: true,
             opacity: 0.2, // semi-transparent so it doesn't block furniture
             roughness: 0.9,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            alphaMap: alphaMap,
+            alphaTest: 0.5
         });
         
         // Remove old ceiling mesh if it exists
