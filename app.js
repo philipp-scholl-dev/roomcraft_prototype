@@ -3186,8 +3186,8 @@ const Viewer3D = {
         const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
         
         // Default materials
-        const woodColor = f.color || 'hsl(33, 40%, 35%)';
-        const fabricColor = f.color || 'hsl(215, 60%, 45%)';
+        const woodColor = f.color3d || f.color || 'hsl(33, 40%, 35%)';
+        const fabricColor = f.color3d || f.color || 'hsl(215, 60%, 45%)';
         
         const woodTex = TextureCache.get('wood', woodColor);
         const fabricTex = TextureCache.get('fabric', fabricColor);
@@ -3932,10 +3932,21 @@ function buildPropertiesPanelContent() {
                 </div>
                 ` : ''}
                 <div class="prop-field prop-span-2">
-                    <label>Farbe</label>
-                    <div class="color-palette" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                    <label>Farbe (2D-Ansicht)</label>
+                    <div class="color-palette color-palette-2d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
                         ${colors.map(c => `
-                            <div class="color-dot ${item.color === c ? 'active' : ''}" 
+                            <div class="color-dot color-dot-2d ${item.color === c ? 'active' : ''}" 
+                                 style="background-color: ${c}" 
+                                 data-color="${c}">
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div class="prop-field prop-span-2">
+                    <label>Farbe (3D-Ansicht)</label>
+                    <div class="color-palette color-palette-3d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                        ${colors.map(c => `
+                            <div class="color-dot color-dot-3d ${(item.color3d || item.color) === c ? 'active' : ''}" 
                                  style="background-color: ${c}" 
                                  data-color="${c}">
                             </div>
@@ -4317,16 +4328,34 @@ function attachPropertiesListeners() {
         });
     }
     
-    // Color Dot Palette
-    const dots = document.querySelectorAll('.color-dot');
-    dots.forEach(dot => {
+    // Color Dot Palette 2D
+    const dots2d = document.querySelectorAll('.color-dot-2d');
+    dots2d.forEach(dot => {
         dot.addEventListener('click', (e) => {
             History.pushState();
             const col = e.target.dataset.color;
             item.color = col;
             
             // update UI dots
-            dots.forEach(d => d.classList.remove('active'));
+            dots2d.forEach(d => d.classList.remove('active'));
+            e.target.classList.add('active');
+            
+            // Redraw 2D layout and update Selected 3D mesh
+            Editor2D.draw();
+            updateSelectedMesh();
+        });
+    });
+    
+    // Color Dot Palette 3D
+    const dots3d = document.querySelectorAll('.color-dot-3d');
+    dots3d.forEach(dot => {
+        dot.addEventListener('click', (e) => {
+            History.pushState();
+            const col = e.target.dataset.color;
+            item.color3d = col;
+            
+            // update UI dots
+            dots3d.forEach(d => d.classList.remove('active'));
             e.target.classList.add('active');
             
             updateSelectedMesh();
