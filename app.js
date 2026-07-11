@@ -4027,7 +4027,7 @@ function buildPropertiesPanelContent() {
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
                     <label>Typ</label>
-                    <input type="text" value="${item.type === 'door' ? (item.isBalcony ? 'Balkontür' : 'Tür') : item.type === 'double-door' ? 'Doppeltür' : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
+                    <input type="text" value="${item.type === 'door' ? (item.isBalcony ? 'Balkontür' : 'Tür') : item.type === 'double-door' ? (item.isBalcony ? 'Doppelbalkontür' : 'Doppeltür') : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
@@ -4622,7 +4622,7 @@ function initUIEvents() {
             
             const conflict = State.elements.find(el => !isValidWallForElement(el, el.wall, el.position));
             if (conflict) {
-                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
+                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': conflict.isBalcony ? 'Doppelbalkontür' : 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
                 const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
                 alert(`Die Dachschräge kann auf dieser Wand nicht ${active ? 'aktiviert' : 'deaktiviert'} werden, da das Element "${elemNames[conflict.type]}" (Wand: ${wallsMap[conflict.wall]}, Position: ${conflict.position}cm) dadurch mit der Dachschräge kollidieren würde.`);
                 State.room.pitches[w].enabled = prevEnabled;
@@ -4655,7 +4655,7 @@ function initUIEvents() {
             
             const conflict = State.elements.find(el => !isValidWallForElement(el, el.wall, el.position));
             if (conflict) {
-                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
+                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': conflict.isBalcony ? 'Doppelbalkontür' : 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
                 const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
                 alert(`Der Kniestock kann nicht geändert werden, da das Element "${elemNames[conflict.type]}" (Wand: ${wallsMap[conflict.wall]}, Position: ${conflict.position}cm) dadurch mit der Dachschräge kollidieren würde.`);
                 State.room.pitches[w].kniestock = prevKnieVal;
@@ -4857,9 +4857,9 @@ function initUIEvents() {
             
             // Determine a temporary element to check validity
             const tempElem = {
-                type: type === 'balcony-door' ? 'door' : type,
-                w: type === 'door' || type === 'balcony-door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
-                h: type === 'door' || type === 'double-door' || type === 'balcony-door' ? 200 : type === 'window' ? 120 : 120,
+                type: type === 'balcony-door' ? 'door' : type === 'double-balcony-door' ? 'double-door' : type,
+                w: type === 'door' || type === 'balcony-door' ? 90 : type === 'double-door' || type === 'double-balcony-door' ? 160 : type === 'window' ? 100 : 80,
+                h: type === 'door' || type === 'double-door' || type === 'balcony-door' || type === 'double-balcony-door' ? 200 : type === 'window' ? 120 : 120,
                 sillHeight: type === 'window' ? 90 : undefined
             };
             
@@ -4879,7 +4879,7 @@ function initUIEvents() {
             }
             
             if (!targetWall) {
-                if (type === 'door' || type === 'double-door' || type === 'balcony-door') {
+                if (type === 'door' || type === 'double-door' || type === 'balcony-door' || type === 'double-balcony-door') {
                     alert('Türen können nicht platziert werden, da alle Wände eine Dachschräge haben oder der Platz blockiert ist!');
                 } else if (type === 'window') {
                     alert('Fenster können nicht platziert werden, da an allen Wänden die Deckenhöhe für dieses Fenster zu niedrig ist!');
@@ -4891,8 +4891,8 @@ function initUIEvents() {
             
             const elem = {
                 id: 'el_' + Date.now(),
-                type: type === 'balcony-door' ? 'door' : type,
-                isBalcony: type === 'balcony-door',
+                type: type === 'balcony-door' ? 'door' : type === 'double-balcony-door' ? 'double-door' : type,
+                isBalcony: type === 'balcony-door' || type === 'double-balcony-door',
                 wall: targetWall,
                 position: targetPos,
                 w: tempElem.w,
@@ -5162,7 +5162,10 @@ function updatePlacedListsUI() {
     // Render Wall Elements List
     const elemNames = { door: 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
     const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
-    renderList('placed-elements-list', State.elements, el => `${el.isBalcony ? 'Balkontür' : elemNames[el.type]} (${wallsMap[el.wall]} - ${el.position}cm)`, 'element');
+    renderList('placed-elements-list', State.elements, el => {
+        const name = el.type === 'double-door' ? (el.isBalcony ? 'Doppelbalkontür' : 'Doppeltür') : (el.isBalcony ? 'Balkontür' : elemNames[el.type]);
+        return `${name} (${wallsMap[el.wall]} - ${el.position}cm)`;
+    }, 'element');
     
     // Render Installations List
     const instNames = { socket: 'Steckdose', switch: 'Lichtschalter', lan: 'LAN', sat: 'SAT', power: 'Starkstrom' };
