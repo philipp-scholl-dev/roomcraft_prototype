@@ -314,6 +314,15 @@ const CollisionEngine = {
     },
 
     checkFurnitureCollision(f1, f2) {
+        // Disable collision for TVs (they sit on other furniture)
+        const name1 = (f1.name || '').toLowerCase();
+        const name2 = (f2.name || '').toLowerCase();
+        const isTV1 = name1.includes('tv') || name1.includes('fernseher') || (f1.tvSize !== null && f1.tvSize !== undefined);
+        const isTV2 = name2.includes('tv') || name2.includes('fernseher') || (f2.tvSize !== null && f2.tvSize !== undefined);
+        if (isTV1 || isTV2) {
+            return false;
+        }
+
         // Vertical span overlap check
         const elev1 = f1.elevation || 0;
         const elev2 = f2.elevation || 0;
@@ -1429,6 +1438,15 @@ const Editor2D = {
                     
                     const nameLower = f.name.toLowerCase();
                     if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
+                        // Draw stand foot base
+                        const baseW = Math.min(f.w * 0.4, 40);
+                        ctx.fillStyle = '#0f172a';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.lineWidth = 1;
+                        ctx.fillRect(-baseW / 2, -Math.min(f.l / 2, 6), baseW, Math.min(f.l, 12));
+                        ctx.strokeRect(-baseW / 2, -Math.min(f.l / 2, 6), baseW, Math.min(f.l, 12));
+
+                        // Draw TV screen bezel
                         ctx.fillStyle = '#0f172a';
                         ctx.fillRect(-f.w / 2 + 5, -2, f.w - 10, 4);
                         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -3103,10 +3121,13 @@ const Viewer3D = {
             
         } else if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
             // TV / Fernseher
+            const baseH = 2;
+            const neckH = 8;
+            const screenHeight = Math.max(10, f.h - baseH - neckH);
+            
             // 1. Base / Stand plate (metal or dark plastic)
             const baseW = Math.min(f.w * 0.4, 40);
             const baseL = Math.min(f.l, 20);
-            const baseH = 2;
             const baseGeo = new THREE.BoxGeometry(baseW, baseH, baseL);
             const baseMesh = new THREE.Mesh(baseGeo, getMat(metalMat));
             baseMesh.position.y = baseH / 2;
@@ -3115,7 +3136,6 @@ const Viewer3D = {
             group.add(baseMesh);
             
             // 2. Neck / Stand post (metal cylinder)
-            const neckH = 10;
             const neckGeo = new THREE.CylinderGeometry(2, 2, neckH, 16);
             const neckMesh = new THREE.Mesh(neckGeo, getMat(metalMat));
             neckMesh.position.y = baseH + neckH / 2;
@@ -3123,15 +3143,15 @@ const Viewer3D = {
             group.add(neckMesh);
             
             // 3. TV Bezel / Frame (slate-800 or black)
-            const bezelGeo = new THREE.BoxGeometry(f.w, f.h, 3);
+            const bezelGeo = new THREE.BoxGeometry(f.w, screenHeight, 3);
             const bezelMesh = new THREE.Mesh(bezelGeo, getMat(screenMat));
-            bezelMesh.position.y = baseH + neckH + f.h / 2;
+            bezelMesh.position.y = baseH + neckH + screenHeight / 2;
             bezelMesh.castShadow = true;
             group.add(bezelMesh);
             
             // 4. Glossy Screen (inset on front face of the bezel)
             const screenW = f.w - 2;
-            const screenH = f.h - 2;
+            const screenH = screenHeight - 2;
             const screenGeo = new THREE.BoxGeometry(screenW, screenH, 0.5);
             const glassScreenMat = new THREE.MeshStandardMaterial({
                 color: 0x0f172a, // dark slate
@@ -3139,7 +3159,7 @@ const Viewer3D = {
                 metalness: 0.9
             });
             const screenMesh = new THREE.Mesh(screenGeo, getMat(glassScreenMat));
-            screenMesh.position.set(0, baseH + neckH + f.h / 2, 1.35); // slightly shifted forward to fit on bezel
+            screenMesh.position.set(0, baseH + neckH + screenHeight / 2, 1.35); // slightly shifted forward to fit on bezel
             group.add(screenMesh);
             
         } else if (nameLower.includes('bett') || f.id.includes('bed')) {
@@ -3188,13 +3208,16 @@ const Viewer3D = {
             pilRMesh.position.set(pilW / 2 + 2, frameH + mattH + pilH / 2, -mattL / 2 + pilL / 2 + headT + 2);
             group.add(pilRMesh);
             
-            // 5. Blanket (colored fabric)
-            const blH = 21;
-            const blW = mattW + 2;
-            const blL = mattL * 0.65;
+            // 5. Blanket (colored fabric folded at the foot of the bed)
+            const blH = 2;
+            const blW = mattW + 0.2;
+            const blL = mattL * 0.6; // covers 60% of mattress
             const blGeo = new THREE.BoxGeometry(blW, blH, blL);
             const blMesh = new THREE.Mesh(blGeo, getMat(fabricMat));
-            blMesh.position.set(0, frameH + 0.5, blL / 2 - headT);
+            
+            // Position on top of mattress, aligned to the foot of the bed
+            const zPos = (headT / 2 + mattL / 2) - blL / 2;
+            blMesh.position.set(0, frameH + mattH + blH / 2, zPos);
             blMesh.castShadow = true;
             blMesh.receiveShadow = true;
             group.add(blMesh);
@@ -3567,7 +3590,7 @@ const Presets = {
     'custom-rect': { name: 'Custom Box', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
     'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
     chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
-    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 70, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 }
+    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 }
 };
 
 function loadExampleRoom() {
@@ -4010,9 +4033,9 @@ function attachPropertiesListeners() {
         const size = Math.max(10, parseInt(e.target.value) || 10);
         item.tvSize = size;
         
-        // 16:9 aspect ratio dimensions (w: size * 2.2138, h: size * 1.2453)
+        // 16:9 aspect ratio dimensions (w: size * 2.2138, h: size * 1.2453 + 10cm stand)
         item.w = Math.round(size * 2.2138 * 10) / 10;
-        item.h = Math.round(size * 1.2453 * 10) / 10;
+        item.h = Math.round((size * 1.2453 + 10) * 10) / 10;
         
         const wInput = document.getElementById('prop-w');
         const hInput = document.getElementById('prop-h');
