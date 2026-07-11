@@ -1198,7 +1198,7 @@ const Editor2D = {
                     ctx.setLineDash([]);
                     
                     // Draw open door leaf
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)');
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)'));
                     ctx.lineWidth = 3.5;
                     ctx.beginPath();
                     ctx.moveTo(hX, 0);
@@ -1233,7 +1233,7 @@ const Editor2D = {
                     ctx.setLineDash([]);
                     
                     // Draw door leaves
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)');
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)'));
                     ctx.lineWidth = 3.5;
                     
                     // Left leaf
@@ -2653,8 +2653,9 @@ const Viewer3D = {
         const leafH = door.h - 4;
         
         if (door.isBalcony) {
-            // White Balcony Door (Glass with white frame)
-            const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            // Balcony Door (Glass with frame)
+            const frameColor = door.color3d || door.color || '#ffffff';
+            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
             const glassMat = new THREE.MeshPhysicalMaterial({
                 color: 0xe2e8f0, // light glass color
                 transparent: true,
@@ -2724,9 +2725,9 @@ const Viewer3D = {
             leafGroup.position.set(isLeft ? leafW / 2 : -leafW / 2, 0, 0);
             pivot.add(leafGroup);
             
-            // Door Frame (white)
+            // Door Frame
             const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
             const frameTop = new THREE.Mesh(frameGeo, frameMat);
             frameTop.position.set(0, door.h - 2, 0);
             frameTop.castShadow = true;
@@ -2735,8 +2736,9 @@ const Viewer3D = {
             
         } else {
             // Standard Wooden Door
+            const leafColor = door.color3d || door.color || 'hsl(33, 40%, 35%)';
             const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
-            const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+            const leafMat = new THREE.MeshStandardMaterial({ color: leafColor, roughness: 0.8 }); // wood
             const leaf = new THREE.Mesh(leafGeo, leafMat);
             leaf.position.set(isLeft ? leafW / 2 : -leafW / 2, leafH / 2, 0);
             leaf.castShadow = true;
@@ -2797,8 +2799,9 @@ const Viewer3D = {
         pivotR.position.set(door.w / 2 - 2, 2, 0);
         
         if (door.isBalcony) {
-            // White Double Balcony Door (Glass with white frame)
-            const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            // Double Balcony Door (Glass with frame)
+            const frameColor = door.color3d || door.color || '#ffffff';
+            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
             const glassMat = new THREE.MeshPhysicalMaterial({
                 color: 0xe2e8f0, // light glass color
                 transparent: true,
@@ -2879,7 +2882,7 @@ const Viewer3D = {
             
             // Door Frame (white top beam)
             const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
             const frameTop = new THREE.Mesh(frameGeo, frameMat);
             frameTop.position.set(0, door.h - 2, 0);
             frameTop.castShadow = true;
@@ -2888,8 +2891,9 @@ const Viewer3D = {
             
         } else {
             // Standard Wooden Double Door
+            const leafColor = door.color3d || door.color || 'hsl(33, 40%, 35%)';
             const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
-            const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+            const leafMat = new THREE.MeshStandardMaterial({ color: leafColor, roughness: 0.8 }); // wood
             
             const leafL = new THREE.Mesh(leafGeo, leafMat);
             leafL.position.set(leafW / 2, leafH / 2, 0);
@@ -3908,21 +3912,22 @@ function buildPropertiesPanelContent() {
     
     if (!item || !container) return;
     
+    const colors = [
+        'hsl(215, 60%, 45%)', // Blue
+        'hsl(33, 50%, 30%)',  // Brown
+        'hsl(180, 50%, 35%)', // Teal
+        'hsl(20, 70%, 40%)',  // Red-orange
+        'hsl(263, 40%, 45%)', // Purple
+        'hsl(35, 45%, 40%)',  // Wood
+        'hsl(142, 60%, 40%)', // Green
+        'hsl(0, 0%, 25%)',    // Charcoal
+        'hsl(0, 0%, 90%)'     // White
+    ];
+    
     let html = '';
     const lockedAttr = item.locked ? 'disabled' : '';
     
     if (type === 'furniture') {
-        const colors = [
-            'hsl(215, 60%, 45%)', // Blue
-            'hsl(33, 50%, 30%)',  // Brown
-            'hsl(180, 50%, 35%)', // Teal
-            'hsl(20, 70%, 40%)',  // Red-orange
-            'hsl(263, 40%, 45%)', // Purple
-            'hsl(35, 45%, 40%)',  // Wood
-            'hsl(142, 60%, 40%)', // Green
-            'hsl(0, 0%, 25%)'     // Charcoal
-        ];
-        
         html = `
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
@@ -4082,6 +4087,36 @@ function buildPropertiesPanelContent() {
                             <option value="out" ${item.direction === 'out' ? 'selected' : ''}>Nach Außen</option>
                         </select>
                     </div>
+                ` : ''}
+                ${(item.type === 'door' || item.type === 'double-door') ? `
+                <div class="prop-field prop-span-2">
+                    <label>Farbe (2D-Ansicht)</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="color-palette color-palette-2d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                            ${colors.map(c => `
+                                <div class="color-dot color-dot-2d ${(item.color || (item.isBalcony ? 'hsl(0, 0%, 90%)' : 'hsl(33, 40%, 35%)')) === c ? 'active' : ''}" 
+                                     style="background-color: ${c}" 
+                                     data-color="${c}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <input type="color" id="prop-color-2d-custom" value="${parseColorToHex(item.color || (item.isBalcony ? 'hsl(0, 0%, 90%)' : 'hsl(33, 40%, 35%)'))}" style="width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; padding: 0; background: transparent;" ${lockedAttr}>
+                    </div>
+                </div>
+                <div class="prop-field prop-span-2">
+                    <label>Farbe (3D-Ansicht)</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div class="color-palette color-palette-3d" style="${item.locked ? 'pointer-events: none; opacity: 0.5;' : ''}">
+                            ${colors.map(c => `
+                                <div class="color-dot color-dot-3d ${(item.color3d || item.color || (item.isBalcony ? 'hsl(0, 0%, 90%)' : 'hsl(33, 40%, 35%)')) === c ? 'active' : ''}" 
+                                     style="background-color: ${c}" 
+                                     data-color="${c}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <input type="color" id="prop-color-3d-custom" value="${parseColorToHex(item.color3d || item.color || (item.isBalcony ? 'hsl(0, 0%, 90%)' : 'hsl(33, 40%, 35%)'))}" style="width: 32px; height: 32px; border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; padding: 0; background: transparent;" ${lockedAttr}>
+                    </div>
+                </div>
                 ` : ''}
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
                     <label class="checkbox-container">
