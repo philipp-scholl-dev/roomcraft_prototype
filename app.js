@@ -26,7 +26,7 @@ const State = {
         gridSize: 10, // cm
         collisionEnabled: true,
         viewMode: '2d', // '2d', '3d', 'split'
-        sunEnabled: true,
+        lightingMode: 'design',
         sunAngle: 45, // degrees
         sunElevation: 45 // degrees
     },
@@ -1141,7 +1141,7 @@ const Editor2D = {
                     ctx.setLineDash([]);
                     
                     // Draw open door leaf
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(38, 92%, 50%)';
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)');
                     ctx.lineWidth = 3.5;
                     ctx.beginPath();
                     ctx.moveTo(hX, 0);
@@ -2217,6 +2217,7 @@ const Viewer3D = {
     doorMeshes: [],
     windowMeshes: [],
     sunLight: null,
+    headlight: null,
     
     init() {
         this.container = document.getElementById('threeCanvasContainer');
@@ -2248,6 +2249,12 @@ const Viewer3D = {
         // Lights
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
+        
+        // Headlight (attached to camera to follow viewer angle)
+        this.headlight = new THREE.DirectionalLight(0xffffff, 0.75);
+        this.headlight.position.set(0, 0, 1);
+        this.camera.add(this.headlight);
+        this.scene.add(this.camera);
         
         this.sunLight = new THREE.DirectionalLight(0xfffdf2, 1.25); // Warm sun light
         this.sunLight.castShadow = true;
@@ -2288,12 +2295,23 @@ const Viewer3D = {
     },
     
     updateSunLight() {
-        if (!this.sunLight) return;
+        if (!this.sunLight || !this.headlight) return;
         
-        const enabled = State.settings.sunEnabled !== false;
-        this.sunLight.visible = enabled;
+        const isSunMode = State.settings.lightingMode === 'sun';
         
-        if (enabled) {
+        // 1. Sun light setup
+        this.sunLight.visible = isSunMode;
+        this.sunLight.castShadow = isSunMode;
+        
+        // 2. Headlight setup
+        this.headlight.visible = !isSunMode;
+        
+        // 3. Ceiling shadow casting
+        if (this.ceilingMesh) {
+            this.ceilingMesh.castShadow = isSunMode;
+        }
+        
+        if (isSunMode) {
             const angleRad = (State.settings.sunAngle || 45) * Math.PI / 180;
             const elevRad = (State.settings.sunElevation || 45) * Math.PI / 180;
             
@@ -2560,19 +2578,116 @@ const Viewer3D = {
         const isLeft = hinge === 'left';
         const isIn = dir === 'in';
         
-        // Door leaf (wood colored box)
-        const leafW = door.w - 4;
-        const leafGeo = new THREE.BoxGeometry(leafW, door.h - 4, 3);
-        const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
-        const leaf = new THREE.Mesh(leafGeo, leafMat);
-        
         // Pivot rotation point for opening door
-        const pivotX = isLeft ? -door.w / 2 + 2 : door.w / 2 - 2;
-        leaf.position.set(isLeft ? leafW / 2 : -leafW / 2, (door.h - 4) / 2, 0);
-        
         const pivot = new THREE.Group();
+        const pivotX = isLeft ? -door.w / 2 + 2 : door.w / 2 - 2;
         pivot.position.set(pivotX, 2, 0);
-        pivot.add(leaf);
+        
+        const leafW = door.w - 4;
+        const leafH = door.h - 4;
+        
+        if (door.isBalcony) {
+            // White Balcony Door (Glass with white frame)
+            const whiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xe2e8f0, // light glass color
+                transparent: true,
+                opacity: 0.25,
+                roughness: 0.1,
+                transmission: 0.95,
+                side: THREE.DoubleSide
+            });
+            
+            const leafGroup = new THREE.Group();
+            
+            // 1. Left border
+            const leftBarGeo = new THREE.BoxGeometry(6, leafH, 3);
+            const leftBar = new THREE.Mesh(leftBarGeo, whiteMat);
+            leftBar.position.set(-leafW / 2 + 3, leafH / 2, 0);
+            leftBar.castShadow = true;
+            leftBar.receiveShadow = true;
+            leafGroup.add(leftBar);
+            
+            // 2. Right border
+            const rightBarGeo = new THREE.BoxGeometry(6, leafH, 3);
+            const rightBar = new THREE.Mesh(rightBarGeo, whiteMat);
+            rightBar.position.set(leafW / 2 - 3, leafH / 2, 0);
+            rightBar.castShadow = true;
+            rightBar.receiveShadow = true;
+            leafGroup.add(rightBar);
+            
+            // 3. Top border
+            const topBarW = leafW - 12;
+            const topBarGeo = new THREE.BoxGeometry(topBarW, 6, 3);
+            const topBar = new THREE.Mesh(topBarGeo, whiteMat);
+            topBar.position.set(0, leafH - 3, 0);
+            topBar.castShadow = true;
+            topBar.receiveShadow = true;
+            leafGroup.add(topBar);
+            
+            // 4. Bottom board (taller)
+            const bottomBarGeo = new THREE.BoxGeometry(topBarW, 12, 3);
+            const bottomBar = new THREE.Mesh(bottomBarGeo, whiteMat);
+            bottomBar.position.set(0, 6, 0);
+            bottomBar.castShadow = true;
+            bottomBar.receiveShadow = true;
+            leafGroup.add(bottomBar);
+            
+            // 5. Middle crossbar (optional horizontal bar)
+            const midBarGeo = new THREE.BoxGeometry(topBarW, 4, 3);
+            const midBar = new THREE.Mesh(midBarGeo, whiteMat);
+            midBar.position.set(0, leafH / 2, 0);
+            midBar.castShadow = true;
+            midBar.receiveShadow = true;
+            leafGroup.add(midBar);
+            
+            // 6. Lower Glass pane
+            const glassLowerH = leafH / 2 - 14;
+            const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1);
+            const glassLower = new THREE.Mesh(glassLowerGeo, glassMat);
+            glassLower.position.set(0, 12 + glassLowerH / 2, 0);
+            leafGroup.add(glassLower);
+            
+            // 7. Upper Glass pane
+            const glassUpperH = leafH / 2 - 8;
+            const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1);
+            const glassUpper = new THREE.Mesh(glassUpperGeo, glassMat);
+            glassUpper.position.set(0, leafH / 2 + 2 + glassUpperH / 2, 0);
+            leafGroup.add(glassUpper);
+            
+            leafGroup.position.set(isLeft ? leafW / 2 : -leafW / 2, 0, 0);
+            pivot.add(leafGroup);
+            
+            // Door Frame (white)
+            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
+            const frameMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const frameTop = new THREE.Mesh(frameGeo, frameMat);
+            frameTop.position.set(0, door.h - 2, 0);
+            frameTop.castShadow = true;
+            frameTop.receiveShadow = true;
+            doorGroup.add(frameTop);
+            
+        } else {
+            // Standard Wooden Door
+            const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
+            const leafMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.8 }); // wood
+            const leaf = new THREE.Mesh(leafGeo, leafMat);
+            leaf.position.set(isLeft ? leafW / 2 : -leafW / 2, leafH / 2, 0);
+            leaf.castShadow = true;
+            leaf.receiveShadow = true;
+            pivot.add(leaf);
+            
+            // Door Frame (slate)
+            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
+            const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
+            const frameTop = new THREE.Mesh(frameGeo, frameMat);
+            frameTop.position.set(0, door.h - 2, 0);
+            frameTop.castShadow = true;
+            frameTop.receiveShadow = true;
+            doorGroup.add(frameTop);
+        }
+        
+        doorGroup.add(pivot);
         
         // Rotate open (45 deg)
         let openAngle = Math.PI / 4;
@@ -2581,15 +2696,6 @@ const Viewer3D = {
         } else {
             pivot.rotation.y = isIn ? openAngle : -openAngle;
         }
-        
-        // Door Frame
-        const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
-        const frameTop = new THREE.Mesh(frameGeo, frameMat);
-        frameTop.position.set(0, door.h - 2, 0);
-        
-        doorGroup.add(pivot);
-        doorGroup.add(frameTop);
         
         let dx = 0, dz = 0;
         const halfThick = 10 / 2; // wall thickness is 10
@@ -3709,7 +3815,7 @@ function buildPropertiesPanelContent() {
             <div class="prop-grid">
                 <div class="prop-field prop-span-2">
                     <label>Typ</label>
-                    <input type="text" value="${item.type === 'door' ? 'Tür' : item.type === 'double-door' ? 'Doppeltür' : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
+                    <input type="text" value="${item.type === 'door' ? (item.isBalcony ? 'Balkontür' : 'Tür') : item.type === 'double-door' ? 'Doppeltür' : item.type === 'window' ? 'Fenster' : 'Dachfenster'}" disabled>
                 </div>
                 <div class="prop-field">
                     <label>Breite (cm)</label>
@@ -4247,7 +4353,7 @@ function initUIEvents() {
             
             const conflict = State.elements.find(el => !isValidWallForElement(el, el.wall, el.position));
             if (conflict) {
-                const elemNames = { door: 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
+                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
                 const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
                 alert(`Die Dachschräge kann auf dieser Wand nicht ${active ? 'aktiviert' : 'deaktiviert'} werden, da das Element "${elemNames[conflict.type]}" (Wand: ${wallsMap[conflict.wall]}, Position: ${conflict.position}cm) dadurch mit der Dachschräge kollidieren würde.`);
                 State.room.pitches[w].enabled = prevEnabled;
@@ -4280,7 +4386,7 @@ function initUIEvents() {
             
             const conflict = State.elements.find(el => !isValidWallForElement(el, el.wall, el.position));
             if (conflict) {
-                const elemNames = { door: 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
+                const elemNames = { door: conflict.isBalcony ? 'Balkontür' : 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
                 const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
                 alert(`Der Kniestock kann nicht geändert werden, da das Element "${elemNames[conflict.type]}" (Wand: ${wallsMap[conflict.wall]}, Position: ${conflict.position}cm) dadurch mit der Dachschräge kollidieren würde.`);
                 State.room.pitches[w].kniestock = prevKnieVal;
@@ -4482,9 +4588,9 @@ function initUIEvents() {
             
             // Determine a temporary element to check validity
             const tempElem = {
-                type: type,
-                w: type === 'door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
-                h: type === 'door' || type === 'double-door' ? 200 : type === 'window' ? 120 : 120,
+                type: type === 'balcony-door' ? 'door' : type,
+                w: type === 'door' || type === 'balcony-door' ? 90 : type === 'double-door' ? 160 : type === 'window' ? 100 : 80,
+                h: type === 'door' || type === 'double-door' || type === 'balcony-door' ? 200 : type === 'window' ? 120 : 120,
                 sillHeight: type === 'window' ? 90 : undefined
             };
             
@@ -4504,7 +4610,7 @@ function initUIEvents() {
             }
             
             if (!targetWall) {
-                if (type === 'door' || type === 'double-door') {
+                if (type === 'door' || type === 'double-door' || type === 'balcony-door') {
                     alert('Türen können nicht platziert werden, da alle Wände eine Dachschräge haben oder der Platz blockiert ist!');
                 } else if (type === 'window') {
                     alert('Fenster können nicht platziert werden, da an allen Wänden die Deckenhöhe für dieses Fenster zu niedrig ist!');
@@ -4516,7 +4622,8 @@ function initUIEvents() {
             
             const elem = {
                 id: 'el_' + Date.now(),
-                type: type,
+                type: type === 'balcony-door' ? 'door' : type,
+                isBalcony: type === 'balcony-door',
                 wall: targetWall,
                 position: targetPos,
                 w: tempElem.w,
@@ -4592,22 +4699,40 @@ function initUIEvents() {
     });
 
     // 10. Sunlight controls listeners
-    const sunEnable = document.getElementById('sun-enable');
+    const btnDesign = document.getElementById('btn-light-design');
+    const btnSun = document.getElementById('btn-light-sun');
     const sunAngle = document.getElementById('sun-angle');
     const sunElevation = document.getElementById('sun-elevation');
     const sunControlsBody = document.getElementById('sun-controls-body');
     const sunAngleVal = document.getElementById('sun-angle-val');
     const sunElevationVal = document.getElementById('sun-elevation-val');
     
-    if (sunEnable && sunAngle && sunElevation && sunControlsBody) {
-        sunEnable.addEventListener('change', (e) => {
-            State.settings.sunEnabled = e.target.checked;
-            if (e.target.checked) {
+    if (btnDesign && btnSun && sunAngle && sunElevation && sunControlsBody) {
+        const setLightingMode = (mode) => {
+            State.settings.lightingMode = mode;
+            
+            btnDesign.classList.remove('active');
+            btnSun.classList.remove('active');
+            
+            if (mode === 'sun') {
+                btnSun.classList.add('active');
                 sunControlsBody.classList.remove('collapsed');
             } else {
+                btnDesign.classList.add('active');
                 sunControlsBody.classList.add('collapsed');
             }
+            
             if (Viewer3D.sunLight) Viewer3D.updateSunLight();
+        };
+        
+        btnDesign.addEventListener('click', () => {
+            History.pushState();
+            setLightingMode('design');
+        });
+        
+        btnSun.addEventListener('click', () => {
+            History.pushState();
+            setLightingMode('sun');
         });
         
         sunAngle.addEventListener('input', (e) => {
@@ -4678,25 +4803,32 @@ function syncRoomInputsUI() {
 }
 
 function syncSunControlsUI() {
-    const sunEnable = document.getElementById('sun-enable');
+    const btnDesign = document.getElementById('btn-light-design');
+    const btnSun = document.getElementById('btn-light-sun');
     const sunAngle = document.getElementById('sun-angle');
     const sunElevation = document.getElementById('sun-elevation');
     const sunControlsBody = document.getElementById('sun-controls-body');
     const sunAngleVal = document.getElementById('sun-angle-val');
     const sunElevationVal = document.getElementById('sun-elevation-val');
     
-    if (sunEnable && sunAngle && sunElevation && sunControlsBody) {
-        sunEnable.checked = State.settings.sunEnabled !== false;
+    if (btnDesign && btnSun && sunAngle && sunElevation && sunControlsBody) {
+        const mode = State.settings.lightingMode || 'design';
+        
+        btnDesign.classList.remove('active');
+        btnSun.classList.remove('active');
+        
+        if (mode === 'sun') {
+            btnSun.classList.add('active');
+            sunControlsBody.classList.remove('collapsed');
+        } else {
+            btnDesign.classList.add('active');
+            sunControlsBody.classList.add('collapsed');
+        }
+        
         sunAngle.value = State.settings.sunAngle || 45;
         sunElevation.value = State.settings.sunElevation || 45;
         sunAngleVal.textContent = (State.settings.sunAngle || 45) + '°';
         sunElevationVal.textContent = (State.settings.sunElevation || 45) + '°';
-        
-        if (State.settings.sunEnabled !== false) {
-            sunControlsBody.classList.remove('collapsed');
-        } else {
-            sunControlsBody.classList.add('collapsed');
-        }
         
         if (Viewer3D.sunLight) Viewer3D.updateSunLight();
     }
@@ -4761,7 +4893,7 @@ function updatePlacedListsUI() {
     // Render Wall Elements List
     const elemNames = { door: 'Tür', 'double-door': 'Doppeltür', window: 'Fenster', skylight: 'Dachfenster' };
     const wallsMap = { top: 'Nord', right: 'Ost', bottom: 'Süd', left: 'West' };
-    renderList('placed-elements-list', State.elements, el => `${elemNames[el.type]} (${wallsMap[el.wall]} - ${el.position}cm)`, 'element');
+    renderList('placed-elements-list', State.elements, el => `${el.isBalcony ? 'Balkontür' : elemNames[el.type]} (${wallsMap[el.wall]} - ${el.position}cm)`, 'element');
     
     // Render Installations List
     const instNames = { socket: 'Steckdose', switch: 'Lichtschalter', lan: 'LAN', sat: 'SAT', power: 'Starkstrom' };

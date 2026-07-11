@@ -195,6 +195,10 @@
                             <div class="elem-preview door-preview"></div>
                             <span>Tür</span>
                         </button>
+                        <button class="add-elem-btn" data-type="balcony-door">
+                            <div class="elem-preview balcony-door-preview"></div>
+                            <span>Balkontür</span>
+                        </button>
                         <button class="add-elem-btn" data-type="double-door">
                             <div class="elem-preview double-door-preview"></div>
                             <span>Doppeltür</span>
@@ -417,13 +421,20 @@
                         <div class="sun-control-panel">
                             <div class="sun-panel-header">
                                 <i data-lucide="sun"></i>
-                                <span>Sonnenlicht</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="sun-enable" checked>
-                                    <span class="slider round"></span>
-                                </label>
+                                <span>Licht & Ansicht</span>
                             </div>
-                            <div class="sun-panel-body" id="sun-controls-body">
+                            
+                            <!-- Segmented Light Mode Switcher -->
+                            <div class="light-mode-switcher">
+                                <button class="light-mode-btn active" id="btn-light-design">
+                                    <i data-lucide="eye"></i> Ansicht
+                                </button>
+                                <button class="light-mode-btn" id="btn-light-sun">
+                                    <i data-lucide="sun"></i> Sonne
+                                </button>
+                            </div>
+
+                            <div class="sun-panel-body collapsed" id="sun-controls-body">
                                 <div class="sun-input-group">
                                     <div class="sun-label-row">
                                         <label for="sun-angle">Ausrichtung</label>
