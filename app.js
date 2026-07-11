@@ -1428,7 +1428,7 @@ const Editor2D = {
                     ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
                     
                     const nameLower = f.name.toLowerCase();
-                    if (nameLower.includes('tv') || nameLower.includes('fernseher') || f.tvSize !== null) {
+                    if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
                         ctx.fillStyle = '#0f172a';
                         ctx.fillRect(-f.w / 2 + 5, -2, f.w - 10, 4);
                         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -2224,7 +2224,7 @@ const Viewer3D = {
         
         // Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0xf1f5f9); // slate-100
+        this.scene.background = new THREE.Color(0x0e1320);
         
         // Camera setup
         this.camera = new THREE.PerspectiveCamera(45, this.container.clientWidth / this.container.clientHeight, 1, 3000);
@@ -2249,13 +2249,14 @@ const Viewer3D = {
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
         
-        this.sunLight = new THREE.DirectionalLight(0xffffff, 0.75);
+        this.sunLight = new THREE.DirectionalLight(0xfffdf2, 1.25); // Warm sun light
         this.sunLight.castShadow = true;
         this.sunLight.shadow.mapSize.width = 2048;
         this.sunLight.shadow.mapSize.height = 2048;
-        this.sunLight.shadow.camera.near = 10;
-        this.sunLight.shadow.camera.far = 2000;
-        const d = 500;
+        this.sunLight.shadow.camera.near = 50;
+        this.sunLight.shadow.camera.far = 5000;
+        this.sunLight.shadow.bias = -0.0005; // avoid shadow acne / stripes
+        const d = 1000;
         this.sunLight.shadow.camera.left = -d;
         this.sunLight.shadow.camera.right = d;
         this.sunLight.shadow.camera.top = d;
@@ -2296,8 +2297,8 @@ const Viewer3D = {
             const angleRad = (State.settings.sunAngle || 45) * Math.PI / 180;
             const elevRad = (State.settings.sunElevation || 45) * Math.PI / 180;
             
-            // Calculate direction vector (sun dome radius of 600cm)
-            const r = 600;
+            // Calculate direction vector (sun dome radius of 2500cm to keep it outside the room)
+            const r = 2500;
             const x = r * Math.cos(elevRad) * Math.cos(angleRad);
             const z = r * Math.cos(elevRad) * Math.sin(angleRad);
             const y = r * Math.sin(elevRad);
@@ -2833,6 +2834,8 @@ const Viewer3D = {
         
         this.ceilingMesh = new THREE.Mesh(ceilGeo, wallMat);
         this.ceilingMesh.position.set(0, 0, 0); // centered
+        this.ceilingMesh.castShadow = true;
+        this.ceilingMesh.receiveShadow = true;
         
         this.scene.add(this.ceilingMesh);
     },
@@ -2923,7 +2926,7 @@ const Viewer3D = {
             mesh.receiveShadow = true;
             group.add(mesh);
             
-        } else if (nameLower.includes('tv') || nameLower.includes('fernseher') || f.tvSize !== null) {
+        } else if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
             // TV / Fernseher
             // 1. Base / Stand plate (metal or dark plastic)
             const baseW = Math.min(f.w * 0.4, 40);
