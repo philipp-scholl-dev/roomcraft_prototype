@@ -14,7 +14,15 @@ const State = {
             right: { enabled: false, kniestock: 80, run: 150 },
             bottom: { enabled: false, kniestock: 80, run: 150 },
             left: { enabled: false, kniestock: 80, run: 150 }
-        }
+        },
+        wallColors: {
+            top: '#f8fafc',
+            right: '#f8fafc',
+            bottom: '#f8fafc',
+            left: '#f8fafc',
+            ceiling: '#ffffff'
+        },
+        floorTexture: 'parquet_oak'
     },
     furniture: [],
     elements: [],       // doors, windows, skylights
@@ -26,9 +34,7 @@ const State = {
         gridSize: 10, // cm
         collisionEnabled: true,
         viewMode: '2d', // '2d', '3d', 'split'
-        lightingMode: 'design',
-        sunAngle: 45, // degrees
-        sunElevation: 45 // degrees
+        viewStyle3D: 'plan' // 'plan' (transparente Planungsansicht) oder 'texture' (Wandfarben & Texturen)
     },
     editor2D: {
         zoom: 1.0,
@@ -2671,6 +2677,339 @@ const TextureGenerator = {
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         return tex;
+    },
+
+    // --- PROCEDURAL / AI FLOOR TEXTURES ---
+    createFloorTexture(type) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        switch (type) {
+            case 'parquet_oak': {
+                // Eichenparkett Natur: 4 Längsdielen mit Versatz
+                ctx.fillStyle = '#c5925e';
+                ctx.fillRect(0, 0, 512, 512);
+                const plankW = 128;
+                const plankH = 256;
+                const tones = ['#d4a373', '#c5925e', '#b88552', '#cca070'];
+                
+                for (let col = 0; col < 4; col++) {
+                    const x = col * plankW;
+                    const offset = (col % 2) * 120;
+                    for (let row = -1; row < 3; row++) {
+                        const y = row * plankH + offset;
+                        const tone = tones[(col + Math.abs(row)) % tones.length];
+                        ctx.fillStyle = tone;
+                        ctx.fillRect(x + 1, y + 1, plankW - 2, plankH - 2);
+                        
+                        // Holzmaserung
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.06)';
+                        ctx.lineWidth = 1;
+                        for (let g = 0; g < 14; g++) {
+                            const gx = x + Math.random() * plankW;
+                            ctx.beginPath();
+                            ctx.moveTo(gx, y);
+                            ctx.bezierCurveTo(gx + (Math.random() - 0.5) * 12, y + plankH * 0.5, gx + (Math.random() - 0.5) * 12, y + plankH, gx, y + plankH);
+                            ctx.stroke();
+                        }
+                        
+                        // Fugen
+                        ctx.strokeStyle = '#3e2712';
+                        ctx.lineWidth = 1.5;
+                        ctx.strokeRect(x, y, plankW, plankH);
+                    }
+                }
+                break;
+            }
+            case 'herringbone': {
+                // Fischgrät-Parkett Classic (45-Grad-Waben)
+                ctx.fillStyle = '#b88552';
+                ctx.fillRect(0, 0, 512, 512);
+                const blockW = 64;
+                const blockH = 128;
+                for (let y = -blockH; y < 512 + blockH; y += blockW) {
+                    for (let x = -blockW; x < 512 + blockW; x += blockW * 2) {
+                        const isEven = Math.floor(y / blockW) % 2 === 0;
+                        ctx.fillStyle = isEven ? '#c5925e' : '#b07e4c';
+                        ctx.fillRect(x, y, blockW, blockH);
+                        ctx.strokeStyle = '#4a2c11';
+                        ctx.lineWidth = 1.5;
+                        ctx.strokeRect(x, y, blockW, blockH);
+                        
+                        // Feine Faserlinien
+                        ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+                        ctx.lineWidth = 0.8;
+                        for (let i = 4; i < blockW; i += 8) {
+                            ctx.beginPath();
+                            ctx.moveTo(x + i, y);
+                            ctx.lineTo(x + i, y + blockH);
+                            ctx.stroke();
+                        }
+                    }
+                }
+                break;
+            }
+            case 'wood_ash': {
+                // Helle Skandi-Esche
+                ctx.fillStyle = '#ede8df';
+                ctx.fillRect(0, 0, 512, 512);
+                const tones = ['#f4f0e8', '#ede8df', '#e4ded3', '#dfd8cc'];
+                const plankW = 128;
+                for (let col = 0; col < 4; col++) {
+                    const x = col * plankW;
+                    ctx.fillStyle = tones[col % tones.length];
+                    ctx.fillRect(x, 0, plankW, 512);
+                    
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+                    for (let i = 0; i < 20; i++) {
+                        const gx = x + Math.random() * plankW;
+                        ctx.beginPath();
+                        ctx.moveTo(gx, 0);
+                        ctx.lineTo(gx + (Math.random() - 0.5) * 8, 512);
+                        ctx.stroke();
+                    }
+                    ctx.strokeStyle = '#9ca3af';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x, 0, plankW, 512);
+                }
+                break;
+            }
+            case 'wood_walnut': {
+                // Dunkles Walnussparkett
+                ctx.fillStyle = '#3d2d20';
+                ctx.fillRect(0, 0, 512, 512);
+                const tones = ['#4a3728', '#3d2d20', '#34261b', '#423023'];
+                const plankW = 128;
+                for (let col = 0; col < 4; col++) {
+                    const x = col * plankW;
+                    ctx.fillStyle = tones[col % tones.length];
+                    ctx.fillRect(x, 0, plankW, 512);
+                    
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+                    for (let i = 0; i < 25; i++) {
+                        const gx = x + Math.random() * plankW;
+                        ctx.beginPath();
+                        ctx.moveTo(gx, 0);
+                        ctx.bezierCurveTo(gx + (Math.random() - 0.5) * 15, 256, gx, 512);
+                        ctx.stroke();
+                    }
+                    ctx.strokeStyle = '#1a120c';
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(x, 0, plankW, 512);
+                }
+                break;
+            }
+            case 'tiles_gray': {
+                // Moderne Feinsteinzeug-Fliesen 2x2
+                ctx.fillStyle = '#cbd5e1';
+                ctx.fillRect(0, 0, 512, 512);
+                const tileS = 256;
+                for (let r = 0; r < 2; r++) {
+                    for (let c = 0; c < 2; c++) {
+                        const x = c * tileS;
+                        const y = r * tileS;
+                        ctx.fillStyle = (r + c) % 2 === 0 ? '#d1d9e2' : '#c5cfd9';
+                        ctx.fillRect(x + 2, y + 2, tileS - 4, tileS - 4);
+                        
+                        // Stein-Körnung
+                        for (let k = 0; k < 600; k++) {
+                            const kx = x + Math.random() * tileS;
+                            const ky = y + Math.random() * tileS;
+                            ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)';
+                            ctx.fillRect(kx, ky, 2, 2);
+                        }
+                    }
+                }
+                // Fugen
+                ctx.strokeStyle = '#64748b';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(0, 0, 512, 512);
+                ctx.beginPath();
+                ctx.moveTo(256, 0); ctx.lineTo(256, 512);
+                ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+                ctx.stroke();
+                break;
+            }
+            case 'marble_white': {
+                // Carrara Marmor Weiß mit Äderung
+                ctx.fillStyle = '#f8fafc';
+                ctx.fillRect(0, 0, 512, 512);
+                // Sanfte Marmorschattierung
+                const grad = ctx.createLinearGradient(0, 0, 512, 512);
+                grad.addColorStop(0, 'rgba(241, 245, 249, 0.8)');
+                grad.addColorStop(0.5, 'rgba(226, 232, 240, 0.4)');
+                grad.addColorStop(1, 'rgba(248, 250, 252, 0.8)');
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, 512, 512);
+                
+                // Graue Äderungen
+                ctx.strokeStyle = 'rgba(100, 116, 139, 0.22)';
+                ctx.lineWidth = 2.5;
+                for (let v = 0; v < 6; v++) {
+                    const startX = Math.random() * 512;
+                    ctx.beginPath();
+                    ctx.moveTo(startX, 0);
+                    ctx.bezierCurveTo(startX + 100, 150, startX - 80, 350, startX + 50, 512);
+                    ctx.stroke();
+                }
+                ctx.strokeStyle = 'rgba(71, 85, 105, 0.12)';
+                ctx.lineWidth = 1;
+                for (let v = 0; v < 10; v++) {
+                    const startY = Math.random() * 512;
+                    ctx.beginPath();
+                    ctx.moveTo(0, startY);
+                    ctx.bezierCurveTo(180, startY + 60, 360, startY - 40, 512, startY + 30);
+                    ctx.stroke();
+                }
+                // Diskrete Fuge
+                ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(0, 0, 512, 512);
+                break;
+            }
+            case 'concrete': {
+                // Sichtbeton / Loft-Estrich
+                ctx.fillStyle = '#71717a';
+                ctx.fillRect(0, 0, 512, 512);
+                for (let i = 0; i < 4000; i++) {
+                    const x = Math.random() * 512;
+                    const y = Math.random() * 512;
+                    const r = Math.random() * 3 + 1;
+                    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)';
+                    ctx.fillRect(x, y, r, r);
+                }
+                // Spachtelzüge / Trowel marks
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+                ctx.lineWidth = 15;
+                for (let j = 0; j < 8; j++) {
+                    ctx.beginPath();
+                    ctx.arc(Math.random() * 512, Math.random() * 512, 120, 0, Math.PI);
+                    ctx.stroke();
+                }
+                break;
+            }
+            case 'terrazzo': {
+                // Modern Terrazzo
+                ctx.fillStyle = '#f1ede8';
+                ctx.fillRect(0, 0, 512, 512);
+                const chipColors = ['#c2593f', '#52796f', '#2d3748', '#d99b26', '#8d99ae', '#3a5a40'];
+                for (let i = 0; i < 700; i++) {
+                    const x = Math.random() * 512;
+                    const y = Math.random() * 512;
+                    const size = Math.random() * 7 + 2;
+                    ctx.fillStyle = chipColors[Math.floor(Math.random() * chipColors.length)];
+                    ctx.beginPath();
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x + size, y + size * 0.4);
+                    ctx.lineTo(x + size * 0.6, y + size);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                break;
+            }
+            case 'tiles_slate': {
+                // Dunkler Schiefer / Anthrazit
+                ctx.fillStyle = '#1e293b';
+                ctx.fillRect(0, 0, 512, 512);
+                const tileS = 256;
+                for (let r = 0; r < 2; r++) {
+                    for (let c = 0; c < 2; c++) {
+                        const x = c * tileS;
+                        const y = r * tileS;
+                        ctx.fillStyle = (r + c) % 2 === 0 ? '#1e293b' : '#172235';
+                        ctx.fillRect(x + 2, y + 2, tileS - 4, tileS - 4);
+                        
+                        // Spalt-Struktur
+                        ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+                        ctx.lineWidth = 1;
+                        for (let k = 0; k < 30; k++) {
+                            const sy = y + Math.random() * tileS;
+                            ctx.beginPath();
+                            ctx.moveTo(x, sy);
+                            ctx.lineTo(x + tileS, sy + (Math.random() - 0.5) * 6);
+                            ctx.stroke();
+                        }
+                    }
+                }
+                ctx.strokeStyle = '#0f172a';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(0, 0, 512, 512);
+                ctx.beginPath();
+                ctx.moveTo(256, 0); ctx.lineTo(256, 512);
+                ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+                ctx.stroke();
+                break;
+            }
+            case 'carpet_warm': {
+                // Teppichboden Bouclé Greige
+                ctx.fillStyle = '#c8c2b5';
+                ctx.fillRect(0, 0, 512, 512);
+                for (let y = 0; y < 512; y += 6) {
+                    for (let x = 0; x < 512; x += 6) {
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+                        ctx.beginPath();
+                        ctx.arc(x + 3, y + 3, 2.5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+                        ctx.beginPath();
+                        ctx.arc(x + 2, y + 2, 1.2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                break;
+            }
+            default: {
+                ctx.fillStyle = '#c5925e';
+                ctx.fillRect(0, 0, 512, 512);
+                break;
+            }
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+    
+    createFloorBump(type) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        if (type.includes('parquet') || type.includes('wood')) {
+            const plankW = 128;
+            ctx.strokeStyle = '#202020';
+            ctx.lineWidth = 2.5;
+            for (let c = 0; c <= 512; c += plankW) {
+                ctx.beginPath(); ctx.moveTo(c, 0); ctx.lineTo(c, 512); ctx.stroke();
+            }
+        } else if (type.includes('tiles') || type === 'marble_white') {
+            ctx.strokeStyle = '#181818';
+            ctx.lineWidth = 3.5;
+            ctx.strokeRect(0, 0, 512, 512);
+            ctx.beginPath();
+            ctx.moveTo(256, 0); ctx.lineTo(256, 512);
+            ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+            ctx.stroke();
+        } else if (type === 'carpet_warm') {
+            for (let y = 0; y < 512; y += 6) {
+                for (let x = 0; x < 512; x += 6) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath(); ctx.arc(x + 3, y + 3, 2, 0, Math.PI * 2); ctx.fill();
+                }
+            }
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
     }
 };
 
@@ -2695,6 +3034,12 @@ const TextureCache = {
             tex = TextureGenerator.createCarpetShaggy(colorHex || '#cbd5e1');
         } else if (type === 'carpet_shaggy_bump') {
             tex = TextureGenerator.createCarpetShaggyBump();
+        } else if (type.startsWith('floor_') && type.endsWith('_bump')) {
+            const floorType = type.replace('floor_', '').replace('_bump', '');
+            tex = TextureGenerator.createFloorBump(floorType);
+        } else if (type.startsWith('floor_')) {
+            const floorType = type.replace('floor_', '');
+            tex = TextureGenerator.createFloorTexture(floorType);
         }
         
         if (tex) this.textures[key] = tex;
@@ -2718,6 +3063,9 @@ const Viewer3D = {
     pitchCheekMeshes: [],
     sunLight: null,
     headlight: null,
+    keys: {},
+    pointerDownPos: null,
+    flatCeilingMesh: null,
     
     init() {
         this.container = document.getElementById('threeCanvasContainer');
@@ -2779,12 +3127,59 @@ const Viewer3D = {
         
         // Event listeners
         window.addEventListener('resize', () => this.resizeViewer());
+        this.initKeyboardControls();
+        this.initWallClickRaycaster();
         
         // Start animation loop
         this.animate();
         
         // Rebuild full room
         this.rebuildFullRoom();
+    },
+    
+    initKeyboardControls() {
+        window.addEventListener('keydown', (e) => {
+            if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+            const code = e.code;
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+                this.keys[code] = true;
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            const code = e.code;
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+                this.keys[code] = false;
+            }
+        });
+    },
+    
+    initWallClickRaycaster() {
+        if (!this.renderer) return;
+        this.renderer.domElement.addEventListener('pointerdown', (e) => {
+            this.pointerDownPos = { x: e.clientX, y: e.clientY };
+        });
+        this.renderer.domElement.addEventListener('pointerup', (e) => {
+            if (!this.pointerDownPos) return;
+            const dist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
+            this.pointerDownPos = null;
+            if (dist > 5) return; // Orbit drag, not a clean click
+            
+            const rect = this.renderer.domElement.getBoundingClientRect();
+            const mouse = new THREE.Vector2(
+                ((e.clientX - rect.left) / rect.width) * 2 - 1,
+                -((e.clientY - rect.top) / rect.height) * 2 + 1
+            );
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, this.camera);
+            const hits = raycaster.intersectObjects(this.wallMeshes, true);
+            if (hits.length > 0) {
+                let obj = hits[0].object;
+                while (obj && !obj.userData.wallName && obj.parent) obj = obj.parent;
+                if (obj && obj.userData.wallName) {
+                    selectSurfaceTarget(obj.userData.wallName);
+                }
+            }
+        });
     },
     
     resizeViewer() {
@@ -2828,7 +3223,31 @@ const Viewer3D = {
     
     animate() {
         requestAnimationFrame(() => this.animate());
-        if (this.controls) this.controls.update();
+        
+        // WASD & Pfeiltasten-Steuerung der 3D-Kamera
+        if (this.camera && this.controls) {
+            const forward = new THREE.Vector3();
+            this.camera.getWorldDirection(forward);
+            forward.y = 0;
+            if (forward.lengthSq() > 0.001) {
+                forward.normalize();
+                const side = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+                
+                const moveDelta = new THREE.Vector3();
+                const speed = 5.5; // cm pro Frame
+                if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDelta.addScaledVector(forward, speed);
+                if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDelta.addScaledVector(forward, -speed);
+                if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDelta.addScaledVector(side, -speed);
+                if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDelta.addScaledVector(side, speed);
+                
+                if (moveDelta.lengthSq() > 0) {
+                    this.camera.position.add(moveDelta);
+                    this.controls.target.add(moveDelta);
+                }
+            }
+            this.controls.update();
+        }
+        
         if (this.renderer) this.renderer.render(this.scene, this.camera);
     },
     
@@ -2856,6 +3275,10 @@ const Viewer3D = {
     },
     
     clearScene() {
+        if (this.flatCeilingMesh) {
+            this.scene.remove(this.flatCeilingMesh);
+            this.flatCeilingMesh = null;
+        }
         // Clear all arrays
         this.wallMeshes.forEach(mesh => this.scene.remove(mesh));
         this.wallMeshes = [];
@@ -2887,27 +3310,63 @@ const Viewer3D = {
     
     buildFloor3D() {
         const room = State.room;
-        const offset = this.roomOffset;
+        const isTextureMode = State.settings.viewStyle3D === 'texture';
+        
+        if (this.floorMesh) {
+            this.scene.remove(this.floorMesh);
+            this.floorMesh = null;
+        }
+        if (this.gridHelper) {
+            this.scene.remove(this.gridHelper);
+            this.gridHelper = null;
+        }
         
         // Floor geometry
         const floorGeo = new THREE.BoxGeometry(room.width, 2, room.depth);
-        const floorMat = new THREE.MeshStandardMaterial({
-            color: 0x1e293b, // slate-800
-            roughness: 0.8,
-            metalness: 0.1
-        });
+        let floorMat;
+        
+        if (isTextureMode) {
+            const floorType = room.floorTexture || 'parquet_oak';
+            const floorTex = TextureCache.get('floor_' + floorType);
+            const floorBump = TextureCache.get('floor_' + floorType + '_bump');
+            
+            // Texturskalierung anpassen
+            const repScale = floorType.includes('tiles') || floorType === 'concrete' ? 70 : 55;
+            const repX = Math.max(1, room.width / repScale);
+            const repY = Math.max(1, room.depth / repScale);
+            floorTex.repeat.set(repX, repY);
+            if (floorBump) floorBump.repeat.set(repX, repY);
+            
+            floorMat = new THREE.MeshStandardMaterial({
+                map: floorTex,
+                bumpMap: floorBump,
+                bumpScale: floorType === 'carpet_warm' ? 0.12 : 0.06,
+                roughness: floorType === 'marble_white' ? 0.25 : (floorType === 'carpet_warm' ? 0.98 : 0.45),
+                metalness: 0.05
+            });
+        } else {
+            floorMat = new THREE.MeshStandardMaterial({
+                color: 0x1e293b, // slate-800
+                roughness: 0.8,
+                metalness: 0.1
+            });
+        }
+        
         this.floorMesh = new THREE.Mesh(floorGeo, floorMat);
         this.floorMesh.position.set(0, -1, 0); // top face at y=0
         this.floorMesh.receiveShadow = true;
         this.scene.add(this.floorMesh);
         
-        // Add Grid lines
+        // Add Grid lines only in planning mode
         this.gridHelper = new THREE.GridHelper(Math.max(room.width, room.depth) * 1.5, 50, 0x475569, 0x334155);
         this.gridHelper.position.set(0, 0.1, 0);
+        this.gridHelper.visible = !isTextureMode;
         this.scene.add(this.gridHelper);
         
         // Set orbit control target
-        this.controls.target.set(0, room.height / 4, 0);
+        if (this.controls) {
+            this.controls.target.set(0, room.height / 4, 0);
+        }
     },
     
     rebuildWalls3D() {
@@ -3054,15 +3513,32 @@ const Viewer3D = {
             };
             
             const wallGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            const wallMat = new THREE.MeshStandardMaterial({
-                color: 0x334155, // slate-700
-                roughness: 0.6,
-                metalness: 0.1,
-                transparent: true,
-                opacity: 0.85 // slightly transparent to easily see inside room
-            });
+            const isTextureMode = State.settings.viewStyle3D === 'texture';
+            
+            let wallMat;
+            if (isTextureMode) {
+                const wallColors = State.room.wallColors || {};
+                const hexColor = wallColors[spec.name] || '#f8fafc';
+                wallMat = new THREE.MeshStandardMaterial({
+                    color: hexColor,
+                    roughness: 0.92,
+                    metalness: 0.02,
+                    transparent: false,
+                    opacity: 1.0,
+                    side: THREE.DoubleSide
+                });
+            } else {
+                wallMat = new THREE.MeshStandardMaterial({
+                    color: 0x334155, // slate-700
+                    roughness: 0.6,
+                    metalness: 0.1,
+                    transparent: true,
+                    opacity: 0.85
+                });
+            }
             
             const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+            wallMesh.userData = { wallName: spec.name };
             
             // Set position and rotation based on wall segment orientation
             // Local shape coordinates (u, v, depth) map to:
@@ -3641,13 +4117,16 @@ const Viewer3D = {
         
         const alphaMap = new THREE.CanvasTexture(canvas);
         
-        // Roof pitch material: opaque, solid slate-700 matching walls, visible and non-transparent
+        const isTextureMode = State.settings.viewStyle3D === 'texture';
+        const ceilingColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f8fafc' : 0x334155);
+        
+        // Roof pitch material
         const wallMat = new THREE.MeshStandardMaterial({
-            color: 0x334155, // slate-700
+            color: isTextureMode ? ceilingColor : 0x334155,
             transparent: false,
             opacity: 1.0,
-            roughness: 0.6,
-            metalness: 0.1,
+            roughness: 0.8,
+            metalness: 0.05,
             side: THREE.DoubleSide,
             alphaMap: alphaMap,
             alphaTest: 0.5,
@@ -3705,6 +4184,24 @@ const Viewer3D = {
         this.ceilingMesh.receiveShadow = true;
         
         this.scene.add(this.ceilingMesh);
+        
+        // Im Texturmodus: Eine Deckenfläche mit BackSide einfügen (von außen transparent, von innen sichtbar)
+        if (this.flatCeilingMesh) {
+            this.scene.remove(this.flatCeilingMesh);
+            this.flatCeilingMesh = null;
+        }
+        if (isTextureMode) {
+            const flatCeilingGeo = new THREE.PlaneGeometry(room.width, room.depth);
+            const flatCeilingMat = new THREE.MeshStandardMaterial({
+                color: ceilingColor,
+                roughness: 0.9,
+                side: THREE.BackSide // von oben durchsichtig, von unten im Raum solide Decke
+            });
+            this.flatCeilingMesh = new THREE.Mesh(flatCeilingGeo, flatCeilingMat);
+            this.flatCeilingMesh.rotation.x = Math.PI / 2;
+            this.flatCeilingMesh.position.set(0, room.height, 0);
+            this.scene.add(this.flatCeilingMesh);
+        }
     },
     
     buildPitchCheekMeshes3D() {
@@ -3715,10 +4212,13 @@ const Viewer3D = {
         const room = State.room;
         const offset = this.roomOffset;
 
+        const isTextureMode = State.settings.viewStyle3D === 'texture';
+        const cheekColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f8fafc' : 0x334155);
+
         const cheekMat = new THREE.MeshStandardMaterial({
-            color: 0x334155, // slate-700
-            roughness: 0.6,
-            metalness: 0.1,
+            color: isTextureMode ? cheekColor : 0x334155,
+            roughness: 0.8,
+            metalness: 0.05,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
@@ -4245,29 +4745,41 @@ const Viewer3D = {
             group.add(runnerMesh);
             
         } else if (f.shape === 'circle') {
-            // Round table
-            const topH = 3;
             const radius = f.w / 2;
+            const isRoundTable = nameLower.includes('tisch') || nameLower.includes('table') || f.isTable;
             
-            const topGeo = new THREE.CylinderGeometry(radius, radius, topH, 32);
-            const topMesh = new THREE.Mesh(topGeo, getMat(woodMat));
-            topMesh.position.y = f.h - topH / 2;
-            topMesh.castShadow = true;
-            topMesh.receiveShadow = true;
-            group.add(topMesh);
-            
-            const pedGeo = new THREE.CylinderGeometry(8, 8, f.h - topH, 16);
-            const pedMesh = new THREE.Mesh(pedGeo, getMat(woodMat));
-            pedMesh.position.y = (f.h - topH) / 2;
-            pedMesh.castShadow = true;
-            pedMesh.receiveShadow = true;
-            group.add(pedMesh);
-            
-            const basePlateGeo = new THREE.CylinderGeometry(radius * 0.5, radius * 0.5, 2, 24);
-            const basePlateMesh = new THREE.Mesh(basePlateGeo, getMat(metalMat));
-            basePlateMesh.position.y = 1;
-            group.add(basePlateMesh);
-            
+            if (isRoundTable) {
+                // Runder Tisch (Tischplatte + Säule + Fußplatte)
+                const topH = 3;
+                const topGeo = new THREE.CylinderGeometry(radius, radius, topH, 32);
+                const topMesh = new THREE.Mesh(topGeo, getMat(woodMat));
+                topMesh.position.y = f.h - topH / 2;
+                topMesh.castShadow = true;
+                topMesh.receiveShadow = true;
+                group.add(topMesh);
+                
+                const pedGeo = new THREE.CylinderGeometry(8, 8, f.h - topH, 16);
+                const pedMesh = new THREE.Mesh(pedGeo, getMat(woodMat));
+                pedMesh.position.y = (f.h - topH) / 2;
+                pedMesh.castShadow = true;
+                pedMesh.receiveShadow = true;
+                group.add(pedMesh);
+                
+                const basePlateGeo = new THREE.CylinderGeometry(radius * 0.5, radius * 0.5, 2, 24);
+                const basePlateMesh = new THREE.Mesh(basePlateGeo, getMat(metalMat));
+                basePlateMesh.position.y = 1;
+                basePlateMesh.castShadow = true;
+                basePlateMesh.receiveShadow = true;
+                group.add(basePlateMesh);
+            } else {
+                // Echtes rundes Custom: Ein sauberer Zylinder
+                const cylGeo = new THREE.CylinderGeometry(radius, radius, f.h, 32);
+                const cylMesh = new THREE.Mesh(cylGeo, getMat(primaryMat));
+                cylMesh.position.y = f.h / 2;
+                cylMesh.castShadow = true;
+                cylMesh.receiveShadow = true;
+                group.add(cylMesh);
+            }
         } else {
             // Custom rectangle block
             const boxGeo = new THREE.BoxGeometry(f.w, heightVal, f.l);
@@ -4401,8 +4913,9 @@ const Presets = {
     chair: { name: 'Stuhl', shape: 'rect', w: 45, l: 45, h: 85, color: 'hsl(20, 70%, 40%)', collisionEnabled: true },
     sofa: { name: 'Sofa', shape: 'rect', w: 210, l: 95, h: 80, color: 'hsl(263, 40%, 45%)', collisionEnabled: true },
     table: { name: 'Esstisch', shape: 'rect', w: 160, l: 90, h: 76, color: 'hsl(35, 45%, 40%)', collisionEnabled: true },
-    'custom-rect': { name: 'Custom Box', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
-    'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
+    'custom-rect': { name: 'Eckiges Custom', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
+    'round-table': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, isTable: true },
+    'custom-circle': { name: 'Rundes Custom', shape: 'circle', w: 80, l: 80, h: 80, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
     chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
     tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 },
     'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' },
@@ -4416,6 +4929,15 @@ function loadExampleRoom() {
     State.room.width = 500;
     State.room.depth = 400;
     State.room.height = 250;
+    
+    State.room.wallColors = {
+        top: '#f8fafc',
+        right: '#f8fafc',
+        bottom: '#f8fafc',
+        left: '#f8fafc',
+        ceiling: '#ffffff'
+    };
+    State.room.floorTexture = 'parquet_oak';
     
     // Set Pitches
     State.room.pitches.top = { enabled: true, kniestock: 80, run: 160 };
@@ -5635,6 +6157,9 @@ function initUIEvents() {
                 color: p.color,
                 collisionEnabled: p.collisionEnabled,
                 isObstacle: p.isObstacle || false,
+                isRug: p.isRug || false,
+                rugTexture: p.rugTexture || 'flat',
+                isTable: p.isTable || false,
                 isColliding: false,
                 elevation: p.elevation || 0,
                 tvSize: p.tvSize !== undefined ? p.tvSize : null
@@ -5770,57 +6295,17 @@ function initUIEvents() {
         }
     });
 
-    // 10. Sunlight controls listeners
-    const btnDesign = document.getElementById('btn-light-design');
-    const btnSun = document.getElementById('btn-light-sun');
-    const sunAngle = document.getElementById('sun-angle');
-    const sunElevation = document.getElementById('sun-elevation');
-    const sunControlsBody = document.getElementById('sun-controls-body');
-    const sunAngleVal = document.getElementById('sun-angle-val');
-    const sunElevationVal = document.getElementById('sun-elevation-val');
+    // 10. 3D View Style Toggle (Planung vs Textur)
+    const btnModePlan = document.getElementById('btn-mode-plan');
+    const btnModeTexture = document.getElementById('btn-mode-texture');
     
-    if (btnDesign && btnSun && sunAngle && sunElevation && sunControlsBody) {
-        const setLightingMode = (mode) => {
-            State.settings.lightingMode = mode;
-            
-            btnDesign.classList.remove('active');
-            btnSun.classList.remove('active');
-            
-            if (mode === 'sun') {
-                btnSun.classList.add('active');
-                sunControlsBody.classList.remove('collapsed');
-            } else {
-                btnDesign.classList.add('active');
-                sunControlsBody.classList.add('collapsed');
-            }
-            
-            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
-        };
-        
-        btnDesign.addEventListener('click', () => {
-            History.pushState();
-            setLightingMode('design');
-        });
-        
-        btnSun.addEventListener('click', () => {
-            History.pushState();
-            setLightingMode('sun');
-        });
-        
-        sunAngle.addEventListener('input', (e) => {
-            const val = parseFloat(e.target.value);
-            State.settings.sunAngle = val;
-            sunAngleVal.textContent = val + '°';
-            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
-        });
-        
-        sunElevation.addEventListener('input', (e) => {
-            const val = parseFloat(e.target.value);
-            State.settings.sunElevation = val;
-            sunElevationVal.textContent = val + '°';
-            if (Viewer3D.sunLight) Viewer3D.updateSunLight();
-        });
+    if (btnModePlan && btnModeTexture) {
+        btnModePlan.addEventListener('click', () => setViewStyle3D('plan'));
+        btnModeTexture.addEventListener('click', () => setViewStyle3D('texture'));
     }
+    
+    // 11. Surfaces Tab (Wandfarben & Bodentexturen) Listeners
+    initSurfaceTabListeners();
 }
 
 function updateSkylightButtonState() {
@@ -5900,39 +6385,155 @@ function syncRoomInputsUI() {
     });
     
     updateSkylightButtonState();
-    syncSunControlsUI();
+    syncSurfaceTabUI();
 }
 
-function syncSunControlsUI() {
-    const btnDesign = document.getElementById('btn-light-design');
-    const btnSun = document.getElementById('btn-light-sun');
-    const sunAngle = document.getElementById('sun-angle');
-    const sunElevation = document.getElementById('sun-elevation');
-    const sunControlsBody = document.getElementById('sun-controls-body');
-    const sunAngleVal = document.getElementById('sun-angle-val');
-    const sunElevationVal = document.getElementById('sun-elevation-val');
-    
-    if (btnDesign && btnSun && sunAngle && sunElevation && sunControlsBody) {
-        const mode = State.settings.lightingMode || 'design';
-        
-        btnDesign.classList.remove('active');
-        btnSun.classList.remove('active');
-        
-        if (mode === 'sun') {
-            btnSun.classList.add('active');
-            sunControlsBody.classList.remove('collapsed');
+let currentSurfaceTarget = 'all';
+
+function setViewStyle3D(mode) {
+    State.settings.viewStyle3D = mode;
+    const btnPlan = document.getElementById('btn-mode-plan');
+    const btnTex = document.getElementById('btn-mode-texture');
+    if (btnPlan && btnTex) {
+        if (mode === 'texture') {
+            btnTex.classList.add('active');
+            btnPlan.classList.remove('active');
         } else {
-            btnDesign.classList.add('active');
-            sunControlsBody.classList.add('collapsed');
+            btnPlan.classList.add('active');
+            btnTex.classList.remove('active');
         }
-        
-        sunAngle.value = State.settings.sunAngle || 45;
-        sunElevation.value = State.settings.sunElevation || 45;
-        sunAngleVal.textContent = (State.settings.sunAngle || 45) + '°';
-        sunElevationVal.textContent = (State.settings.sunElevation || 45) + '°';
-        
-        if (Viewer3D.sunLight) Viewer3D.updateSunLight();
     }
+    if (Viewer3D.renderer) {
+        Viewer3D.buildFloor3D();
+        Viewer3D.rebuildWalls3D();
+    }
+}
+
+function selectSurfaceTarget(target) {
+    currentSurfaceTarget = target;
+    const sel = document.getElementById('surface-target-select');
+    if (sel) sel.value = target;
+    
+    // Switch to surfaces tab if not already active
+    const tabBtn = document.querySelector('.tab-btn[data-tab="tab-surfaces"]');
+    if (tabBtn && !tabBtn.classList.contains('active')) {
+        tabBtn.click();
+    }
+    syncSurfaceTabUI();
+}
+
+function setWallColor(color, target = currentSurfaceTarget) {
+    History.pushState();
+    if (!State.room.wallColors) {
+        State.room.wallColors = { top: '#f8fafc', right: '#f8fafc', bottom: '#f8fafc', left: '#f8fafc', ceiling: '#ffffff' };
+    }
+    if (target === 'all') {
+        State.room.wallColors.top = color;
+        State.room.wallColors.right = color;
+        State.room.wallColors.bottom = color;
+        State.room.wallColors.left = color;
+    } else if (target === 'ceiling') {
+        State.room.wallColors.ceiling = color;
+    } else {
+        State.room.wallColors[target] = color;
+    }
+    
+    // Auto-switch to texture/color view
+    if (State.settings.viewStyle3D !== 'texture') {
+        setViewStyle3D('texture');
+    } else {
+        Viewer3D.rebuildWalls3D();
+    }
+    syncSurfaceTabUI();
+}
+
+function setFloorTexture(floorKey) {
+    History.pushState();
+    State.room.floorTexture = floorKey;
+    
+    if (State.settings.viewStyle3D !== 'texture') {
+        setViewStyle3D('texture');
+    } else {
+        Viewer3D.buildFloor3D();
+    }
+    syncSurfaceTabUI();
+}
+
+function initSurfaceTabListeners() {
+    const targetSel = document.getElementById('surface-target-select');
+    if (targetSel) {
+        targetSel.addEventListener('change', (e) => {
+            currentSurfaceTarget = e.target.value;
+            syncSurfaceTabUI();
+        });
+    }
+    
+    // Preset wall color dots
+    document.querySelectorAll('.surface-color-dot').forEach(dot => {
+        dot.addEventListener('click', () => {
+            const color = dot.dataset.color;
+            setWallColor(color);
+        });
+    });
+    
+    // Custom color input
+    const customColor = document.getElementById('surface-custom-color');
+    if (customColor) {
+        customColor.addEventListener('input', (e) => {
+            setWallColor(e.target.value);
+        });
+    }
+    
+    // Apply to all walls button
+    const btnAllWalls = document.getElementById('btn-apply-all-walls');
+    if (btnAllWalls) {
+        btnAllWalls.addEventListener('click', () => {
+            const wallColors = State.room.wallColors || {};
+            const currentColor = (currentSurfaceTarget === 'all' || currentSurfaceTarget === 'ceiling') 
+                ? (wallColors.top || '#f8fafc') 
+                : (wallColors[currentSurfaceTarget] || '#f8fafc');
+            setWallColor(currentColor, 'all');
+        });
+    }
+    
+    // Floor texture cards
+    document.querySelectorAll('.floor-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const floor = card.dataset.floor;
+            setFloorTexture(floor);
+        });
+    });
+}
+
+function syncSurfaceTabUI() {
+    const wallColors = State.room.wallColors || { top: '#f8fafc', right: '#f8fafc', bottom: '#f8fafc', left: '#f8fafc', ceiling: '#ffffff' };
+    const currentColor = (currentSurfaceTarget === 'all') 
+        ? wallColors.top 
+        : (wallColors[currentSurfaceTarget] || '#f8fafc');
+        
+    const customColor = document.getElementById('surface-custom-color');
+    const colorHexLabel = document.getElementById('surface-color-hex');
+    if (customColor) customColor.value = currentColor.startsWith('#') ? currentColor : '#f8fafc';
+    if (colorHexLabel) colorHexLabel.textContent = currentColor;
+    
+    // Highlight active color dot
+    document.querySelectorAll('.surface-color-dot').forEach(dot => {
+        if (dot.dataset.color.toLowerCase() === currentColor.toLowerCase()) {
+            dot.classList.add('active');
+        } else {
+            dot.classList.remove('active');
+        }
+    });
+    
+    // Highlight active floor card
+    const currentFloor = State.room.floorTexture || 'parquet_oak';
+    document.querySelectorAll('.floor-card').forEach(card => {
+        if (card.dataset.floor === currentFloor) {
+            card.classList.add('active');
+        } else {
+            card.classList.remove('active');
+        }
+    });
 }
 
 function updatePlacedListsUI() {

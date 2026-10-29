@@ -46,6 +46,10 @@
                     <i data-lucide="armchair"></i>
                     <span>Möbel</span>
                 </button>
+                <button class="tab-btn" data-tab="tab-surfaces" title="Farben & Texturen">
+                    <i data-lucide="palette"></i>
+                    <span>Farben</span>
+                </button>
             </nav>
 
             <div class="sidebar-content">
@@ -359,6 +363,10 @@
                             <i data-lucide="square"></i>
                             <span>Eckiges Custom</span>
                         </button>
+                        <button class="preset-btn" data-preset="round-table">
+                            <i data-lucide="disc"></i>
+                            <span>Runder Tisch</span>
+                        </button>
                         <button class="preset-btn" data-preset="custom-circle">
                             <i data-lucide="circle"></i>
                             <span>Rundes Custom</span>
@@ -382,6 +390,128 @@
                     <h2>Platzierte Möbel</h2>
                     <div class="placed-list" id="placed-furniture-list">
                         <p class="empty-list-text">Keine Möbel im Raum platziert.</p>
+                    </div>
+                </div>
+
+                <!-- Tab: Surfaces (Farben & Texturen) -->
+                <div class="tab-panel" id="tab-surfaces">
+                    <h2>Wand- & Deckenfarben</h2>
+                    <p class="section-desc">Farben pro Wand anpassen oder direkt auf eine Wand in der 3D-Ansicht klicken.</p>
+                    
+                    <div class="surface-target-group">
+                        <label for="surface-target-select">Bereich auswählen:</label>
+                        <select id="surface-target-select">
+                            <option value="all">Alle Wände</option>
+                            <option value="top">Wand Nord (Oben)</option>
+                            <option value="right">Wand Ost (Rechts)</option>
+                            <option value="bottom">Wand Süd (Unten)</option>
+                            <option value="left">Wand West (Links)</option>
+                            <option value="ceiling">Decke</option>
+                        </select>
+                    </div>
+
+                    <div class="surface-color-section">
+                        <label>Farbton wählen</label>
+                        <div class="color-palette-surface">
+                            <div class="surface-color-dot active" style="background-color: #f8fafc" data-color="#f8fafc" title="Reinweiß"></div>
+                            <div class="surface-color-dot" style="background-color: #fefae0" data-color="#fefae0" title="Warmweiß / Creme"></div>
+                            <div class="surface-color-dot" style="background-color: #e2e8f0" data-color="#e2e8f0" title="Hellgrau"></div>
+                            <div class="surface-color-dot" style="background-color: #d6cfc7" data-color="#d6cfc7" title="Greige / Sand"></div>
+                            <div class="surface-color-dot" style="background-color: #8da399" data-color="#8da399" title="Salbeigrün"></div>
+                            <div class="surface-color-dot" style="background-color: #4a6b5d" data-color="#4a6b5d" title="Waldgrün"></div>
+                            <div class="surface-color-dot" style="background-color: #7c93a8" data-color="#7c93a8" title="Taubenblau"></div>
+                            <div class="surface-color-dot" style="background-color: #1e3a5f" data-color="#1e3a5f" title="Tiefblau"></div>
+                            <div class="surface-color-dot" style="background-color: #c86d51" data-color="#c86d51" title="Terracotta"></div>
+                            <div class="surface-color-dot" style="background-color: #dfb8ad" data-color="#dfb8ad" title="Puderrosa"></div>
+                            <div class="surface-color-dot" style="background-color: #334155" data-color="#334155" title="Anthrazit"></div>
+                            <div class="surface-color-dot" style="background-color: #18181b" data-color="#18181b" title="Dunkles Carbon"></div>
+                        </div>
+                        
+                        <div class="custom-color-row">
+                            <input type="color" id="surface-custom-color" value="#f8fafc">
+                            <span id="surface-color-hex">#f8fafc</span>
+                            <button class="btn btn-secondary btn-sm" id="btn-apply-all-walls" title="Diesen Farbton auf alle Wände anwenden">
+                                <i data-lucide="copy"></i> Auf alle Wände
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <h2>Bodenbelag</h2>
+                    <p class="section-desc">Auswahl generierter Texturen für den Raum:</p>
+
+                    <div class="floor-texture-grid">
+                        <div class="floor-card active" data-floor="parquet_oak">
+                            <div class="floor-thumb floor-thumb-parquet"></div>
+                            <div class="floor-meta">
+                                <strong>Eichenparkett</strong>
+                                <span>Natur geölt</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="herringbone">
+                            <div class="floor-thumb floor-thumb-herringbone"></div>
+                            <div class="floor-meta">
+                                <strong>Fischgrät Classic</strong>
+                                <span>Eiche Chevron</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="wood_ash">
+                            <div class="floor-thumb floor-thumb-ash"></div>
+                            <div class="floor-meta">
+                                <strong>Skandi Esche</strong>
+                                <span>Hell gebleicht</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="wood_walnut">
+                            <div class="floor-thumb floor-thumb-walnut"></div>
+                            <div class="floor-meta">
+                                <strong>Walnuss dunkel</strong>
+                                <span>Edelholz dunkel</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="tiles_gray">
+                            <div class="floor-thumb floor-thumb-tiles"></div>
+                            <div class="floor-meta">
+                                <strong>Feinsteinzeug</strong>
+                                <span>Hellgrau 60x60</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="marble_white">
+                            <div class="floor-thumb floor-thumb-marble"></div>
+                            <div class="floor-meta">
+                                <strong>Carrara Marmor</strong>
+                                <span>Weiß poliert</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="concrete">
+                            <div class="floor-thumb floor-thumb-concrete"></div>
+                            <div class="floor-meta">
+                                <strong>Sichtbeton</strong>
+                                <span>Loft-Estrich</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="terrazzo">
+                            <div class="floor-thumb floor-thumb-terrazzo"></div>
+                            <div class="floor-meta">
+                                <strong>Terrazzo Bunt</strong>
+                                <span>Veneto Modern</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="tiles_slate">
+                            <div class="floor-thumb floor-thumb-slate"></div>
+                            <div class="floor-meta">
+                                <strong>Schieferfliesen</strong>
+                                <span>Naturstein Anthrazit</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="carpet_warm">
+                            <div class="floor-thumb floor-thumb-carpet"></div>
+                            <div class="floor-meta">
+                                <strong>Teppichboden</strong>
+                                <span>Bouclé Greige</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -493,44 +623,25 @@
                 <!-- 3D Preview Panel -->
                 <div class="preview-pane" id="pane-3d">
                     <div class="threejs-wrapper">
-                        <!-- Sunlight Control Panel -->
-                        <div class="sun-control-panel">
-                            <div class="sun-panel-header">
-                                <i data-lucide="sun"></i>
-                                <span>Licht & Ansicht</span>
+                        <!-- 3D View Style Toggle: Planung vs Textur -->
+                        <div class="view-mode-panel">
+                            <div class="view-mode-header">
+                                <i data-lucide="layers"></i>
+                                <span>Ansicht</span>
                             </div>
-                            
-                            <!-- Segmented Light Mode Switcher -->
-                            <div class="light-mode-switcher">
-                                <button class="light-mode-btn active" id="btn-light-design">
-                                    <i data-lucide="eye"></i> Ansicht
+                            <div class="view-mode-switcher">
+                                <button class="view-mode-btn active" id="btn-mode-plan" title="Transparente Planungsansicht">
+                                    <i data-lucide="box"></i> Planung
                                 </button>
-                                <button class="light-mode-btn" id="btn-light-sun">
-                                    <i data-lucide="sun"></i> Sonne
+                                <button class="view-mode-btn" id="btn-mode-texture" title="Wandfarben & Bodentexturen">
+                                    <i data-lucide="palette"></i> Textur
                                 </button>
-                            </div>
-
-                            <div class="sun-panel-body collapsed" id="sun-controls-body">
-                                <div class="sun-input-group">
-                                    <div class="sun-label-row">
-                                        <label for="sun-angle">Ausrichtung</label>
-                                        <span id="sun-angle-val">45°</span>
-                                    </div>
-                                    <input type="range" id="sun-angle" min="0" max="360" value="45" step="1">
-                                </div>
-                                <div class="sun-input-group">
-                                    <div class="sun-label-row">
-                                        <label for="sun-elevation">Höhe (Winkel)</label>
-                                        <span id="sun-elevation-val">45°</span>
-                                    </div>
-                                    <input type="range" id="sun-elevation" min="5" max="90" value="45" step="1">
-                                </div>
                             </div>
                         </div>
 
                         <div id="threeCanvasContainer"></div>
                         <div class="three-controls-info">
-                            <i data-lucide="info"></i> Links klick + Ziehen: Drehen | Rechts klick + Ziehen: Bewegen | Scrollen: Zoom
+                            <i data-lucide="info"></i> Drehen: Linksklick | Bewegen: Rechtsklick / WASD / Pfeiltasten | Zoom: Scrollen | Wand anklicken für Farbauswahl
                         </div>
                         <!-- Loading or notification in 3D -->
                         <div class="threejs-overlay" id="threejs-overlay">
