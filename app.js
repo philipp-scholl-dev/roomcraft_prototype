@@ -471,7 +471,7 @@ const CollisionEngine = {
         // Reset
         State.furniture.forEach(f => f.isColliding = false);
 
-        // Check Furniture vs Furniture
+        // Check Furniture vs Furniture (but only against walls and roof pitches)
         for (let i = 0; i < State.furniture.length; i++) {
             const f1 = State.furniture[i];
             if (!f1.collisionEnabled) continue;
@@ -481,23 +481,15 @@ const CollisionEngine = {
                 f1.isColliding = true;
                 anyCollision = true;
             }
-
-            // Check vs roof pitches
-            if (this.checkRoofPitchCollision(f1)) {
+            
+            // Check vs roof pitches (unless it's a rug)
+            if (!f1.isRug && this.checkRoofPitchCollision(f1)) {
                 f1.isColliding = true;
                 anyCollision = true;
             }
 
-            for (let j = i + 1; j < State.furniture.length; j++) {
-                const f2 = State.furniture[j];
-                if (!f2.collisionEnabled) continue;
-
-                if (this.checkFurnitureCollision(f1, f2)) {
-                    f1.isColliding = true;
-                    f2.isColliding = true;
-                    anyCollision = true;
-                }
-            }
+            // Furniture vs Furniture collision is completely disabled
+            // (Kollision nur mit Wänden / Dachschrägen)
         }
 
         // Show/hide collision badge
@@ -2712,7 +2704,7 @@ const Viewer3D = {
             this.wallMeshes.push(wallMesh);
         });
 
-        // 6. Build Slanted Roof Ceilings (semi-transparent glass planes for slants)
+        // 6. Build Slanted Roof (visible and solid non-transparent roof pitches)
         this.buildCeilingRoof3D();
     },
     
@@ -3151,15 +3143,46 @@ const Viewer3D = {
         const room = State.room;
         const offset = this.roomOffset;
         
-        // Create an alpha map to cut out holes for skylights in the ceiling geometry
+        // Remove old ceiling mesh if it exists
+        if (this.ceilingMesh) {
+            this.scene.remove(this.ceilingMesh);
+            this.ceilingMesh = null;
+        }
+        
+        if (!wallsAnyPitch()) {
+            return;
+        }
+        
+        // Create an alpha map to render active pitch areas solid and cut out skylights
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 512;
         const ctx = canvas.getContext('2d');
         
-        // Fill with white (solid ceiling)
-        ctx.fillStyle = '#ffffff';
+        // Fill black by default (transparent for flat ceiling)
+        ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, 512, 512);
+        
+        // Fill white for active roof pitch areas (solid, visible slant surfaces)
+        ctx.fillStyle = '#ffffff';
+        if (room.pitches.top.enabled) {
+            const h = (room.pitches.top.run / room.depth) * 512;
+            ctx.fillRect(0, 0, 512, h);
+        }
+        if (room.pitches.bottom.enabled) {
+            const y = ((room.depth - room.pitches.bottom.run) / room.depth) * 512;
+            const h = (room.pitches.bottom.run / room.depth) * 512;
+            ctx.fillRect(0, y, 512, h);
+        }
+        if (room.pitches.left.enabled) {
+            const w = (room.pitches.left.run / room.width) * 512;
+            ctx.fillRect(0, 0, w, 512);
+        }
+        if (room.pitches.right.enabled) {
+            const x = ((room.width - room.pitches.right.run) / room.width) * 512;
+            const w = (room.pitches.right.run / room.width) * 512;
+            ctx.fillRect(x, 0, w, 512);
+        }
         
         // Fill black for skylight footprints
         ctx.fillStyle = '#000000';
@@ -3217,24 +3240,22 @@ const Viewer3D = {
         
         const alphaMap = new THREE.CanvasTexture(canvas);
         
+        // Roof pitch material: opaque, solid slate-700 matching walls, visible and non-transparent
         const wallMat = new THREE.MeshStandardMaterial({
-            color: 0x475569, // slate-600
-            transparent: true,
-            opacity: 0.2, // semi-transparent so it doesn't block furniture
-            roughness: 0.9,
+            color: 0x334155, // slate-700
+            transparent: false,
+            opacity: 1.0,
+            roughness: 0.6,
+            metalness: 0.1,
             side: THREE.DoubleSide,
             alphaMap: alphaMap,
-            alphaTest: 0.5
+            alphaTest: 0.5,
+            depthWrite: true
         });
         
-        // Remove old ceiling mesh if it exists
-        if (this.ceilingMesh) {
-            this.scene.remove(this.ceilingMesh);
-        }
-        
-        // Create a detailed grid geometry (40x40 segments) to represent the ceiling
-        const segmentsX = 40;
-        const segmentsZ = 40;
+        // Detailed grid geometry to represent the ceiling slopes accurately
+        const segmentsX = Math.max(60, Math.round(room.width / 5));
+        const segmentsZ = Math.max(60, Math.round(room.depth / 5));
         const ceilGeo = new THREE.PlaneGeometry(room.width, room.depth, segmentsX, segmentsZ);
         
         // Rotate the plane to be horizontal (default PlaneGeometry is vertical in X-Y)
