@@ -401,19 +401,20 @@
                     <div class="surface-target-group">
                         <label for="surface-target-select">Bereich auswählen:</label>
                         <select id="surface-target-select">
-                            <option value="all">Alle Wände</option>
+                            <option value="all">Alle Wände & Schrägen</option>
+                            <option value="pitch">Dachschräge(n)</option>
                             <option value="top">Wand Nord (Oben)</option>
                             <option value="right">Wand Ost (Rechts)</option>
                             <option value="bottom">Wand Süd (Unten)</option>
                             <option value="left">Wand West (Links)</option>
-                            <option value="ceiling">Decke</option>
+                            <option value="ceiling">Flache Decke</option>
                         </select>
                     </div>
 
                     <div class="surface-color-section">
                         <label>Farbton wählen</label>
                         <div class="color-palette-surface">
-                            <div class="surface-color-dot active" style="background-color: #f8fafc" data-color="#f8fafc" title="Reinweiß"></div>
+                            <div class="surface-color-dot active" style="background-color: #f0eee9" data-color="#f0eee9" title="Sanftes Naturweiß"></div>
                             <div class="surface-color-dot" style="background-color: #fefae0" data-color="#fefae0" title="Warmweiß / Creme"></div>
                             <div class="surface-color-dot" style="background-color: #e2e8f0" data-color="#e2e8f0" title="Hellgrau"></div>
                             <div class="surface-color-dot" style="background-color: #d6cfc7" data-color="#d6cfc7" title="Greige / Sand"></div>
@@ -428,10 +429,10 @@
                         </div>
                         
                         <div class="custom-color-row">
-                            <input type="color" id="surface-custom-color" value="#f8fafc">
-                            <span id="surface-color-hex">#f8fafc</span>
-                            <button class="btn btn-secondary btn-sm" id="btn-apply-all-walls" title="Diesen Farbton auf alle Wände anwenden">
-                                <i data-lucide="copy"></i> Auf alle Wände
+                            <input type="color" id="surface-custom-color" value="#f0eee9">
+                            <span id="surface-color-hex">#f0eee9</span>
+                            <button class="btn btn-secondary btn-sm" id="btn-apply-all-walls" title="Diesen Farbton auf alle Wände & Schrägen anwenden">
+                                <i data-lucide="copy"></i> Auf alle Wände & Schrägen
                             </button>
                         </div>
                     </div>
@@ -439,78 +440,47 @@
                     <div class="divider"></div>
 
                     <h2>Bodenbelag</h2>
-                    <p class="section-desc">Auswahl generierter Texturen für den Raum:</p>
+                    <p class="section-desc">Auswahl hochwertiger Texturen für den Raum:</p>
 
-                    <div class="floor-texture-grid">
-                        <div class="floor-card active" data-floor="parquet_oak">
-                            <div class="floor-thumb floor-thumb-parquet"></div>
+                    <div class="floor-texture-grid" id="floor-texture-grid">
+                        <div class="floor-card active" data-floor="laminat_hell">
+                            <div class="floor-thumb" style="background-image: url('texturen/laminat_hell.jpg'); background-size: cover; background-position: center;"></div>
                             <div class="floor-meta">
-                                <strong>Eichenparkett</strong>
-                                <span>Natur geölt</span>
+                                <strong>Laminat Hell</strong>
+                                <span>Eiche Landhausdiele</span>
                             </div>
                         </div>
-                        <div class="floor-card" data-floor="herringbone">
-                            <div class="floor-thumb floor-thumb-herringbone"></div>
+                        <div class="floor-card" data-floor="anthrazit_holz">
+                            <div class="floor-thumb" style="background-image: url('texturen/anthrazit_holz_boden_textur.jpg'); background-size: cover; background-position: center;"></div>
                             <div class="floor-meta">
-                                <strong>Fischgrät Classic</strong>
-                                <span>Eiche Chevron</span>
+                                <strong>Holzboden Anthrazit</strong>
+                                <span>Parkett Carbon</span>
                             </div>
                         </div>
-                        <div class="floor-card" data-floor="wood_ash">
-                            <div class="floor-thumb floor-thumb-ash"></div>
+                        <div class="floor-card" data-floor="teppich_flach">
+                            <div class="floor-thumb" style="background-image: url('texturen/teppich_textur_flach.jpg'); background-size: cover; background-position: center;"></div>
                             <div class="floor-meta">
-                                <strong>Skandi Esche</strong>
-                                <span>Hell gebleicht</span>
+                                <strong>Teppichboden Schlinge</strong>
+                                <span>Flachgewebe Anthrazit</span>
                             </div>
                         </div>
-                        <div class="floor-card" data-floor="wood_walnut">
-                            <div class="floor-thumb floor-thumb-walnut"></div>
+                        <div class="floor-card" data-floor="teppich_hoch">
+                            <div class="floor-thumb" style="background-image: url('texturen/teppich_hoch.jpg'); background-size: cover; background-position: center;"></div>
                             <div class="floor-meta">
-                                <strong>Walnuss dunkel</strong>
-                                <span>Edelholz dunkel</span>
+                                <strong>Teppichboden Hochflor</strong>
+                                <span>Shaggy Kuschelflor</span>
                             </div>
                         </div>
-                        <div class="floor-card" data-floor="tiles_gray">
-                            <div class="floor-thumb floor-thumb-tiles"></div>
-                            <div class="floor-meta">
-                                <strong>Feinsteinzeug</strong>
-                                <span>Hellgrau 60x60</span>
-                            </div>
+                    </div>
+
+                    <div class="floor-scale-box" style="margin-top: 14px; padding: 12px; background: rgba(30, 41, 59, 0.45); border: 1px solid var(--border-color); border-radius: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <label for="floor-texture-scale-slider" style="font-weight: 500; font-size: 12.5px; color: var(--text-secondary);">Textur-Skalierung</label>
+                            <span id="floor-texture-scale-val" style="font-size: 12px; color: var(--primary-light, #a78bfa); font-weight: 600;">100%</span>
                         </div>
-                        <div class="floor-card" data-floor="marble_white">
-                            <div class="floor-thumb floor-thumb-marble"></div>
-                            <div class="floor-meta">
-                                <strong>Carrara Marmor</strong>
-                                <span>Weiß poliert</span>
-                            </div>
-                        </div>
-                        <div class="floor-card" data-floor="concrete">
-                            <div class="floor-thumb floor-thumb-concrete"></div>
-                            <div class="floor-meta">
-                                <strong>Sichtbeton</strong>
-                                <span>Loft-Estrich</span>
-                            </div>
-                        </div>
-                        <div class="floor-card" data-floor="terrazzo">
-                            <div class="floor-thumb floor-thumb-terrazzo"></div>
-                            <div class="floor-meta">
-                                <strong>Terrazzo Bunt</strong>
-                                <span>Veneto Modern</span>
-                            </div>
-                        </div>
-                        <div class="floor-card" data-floor="tiles_slate">
-                            <div class="floor-thumb floor-thumb-slate"></div>
-                            <div class="floor-meta">
-                                <strong>Schieferfliesen</strong>
-                                <span>Naturstein Anthrazit</span>
-                            </div>
-                        </div>
-                        <div class="floor-card" data-floor="carpet_warm">
-                            <div class="floor-thumb floor-thumb-carpet"></div>
-                            <div class="floor-meta">
-                                <strong>Teppichboden</strong>
-                                <span>Bouclé Greige</span>
-                            </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="range" id="floor-texture-scale-slider" min="30" max="300" value="100" step="5" style="flex: 1;">
+                            <button class="btn btn-secondary btn-sm" id="btn-reset-floor-scale" title="Standard-Skalierung wiederherstellen" style="padding: 3px 8px; font-size: 11px;">Reset</button>
                         </div>
                     </div>
                 </div>
@@ -641,7 +611,7 @@
 
                         <div id="threeCanvasContainer"></div>
                         <div class="three-controls-info">
-                            <i data-lucide="info"></i> Drehen: Linksklick | Bewegen: Rechtsklick / WASD / Pfeiltasten | Zoom: Scrollen | Wand anklicken für Farbauswahl
+                            <i data-lucide="info"></i> Bewegen: WASD / Rechtsklick | Fliegen: Leertaste (hoch) / Shift (runter) | Neigen & Drehen: Pfeiltasten / Linksklick | Zoom: Scrollen | Wand anklicken für Farbauswahl
                         </div>
                         <!-- Loading or notification in 3D -->
                         <div class="threejs-overlay" id="threejs-overlay">

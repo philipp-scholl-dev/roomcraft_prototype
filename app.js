@@ -16,13 +16,15 @@ const State = {
             left: { enabled: false, kniestock: 80, run: 150 }
         },
         wallColors: {
-            top: '#f8fafc',
-            right: '#f8fafc',
-            bottom: '#f8fafc',
-            left: '#f8fafc',
-            ceiling: '#ffffff'
+            top: '#f0eee9',
+            right: '#f0eee9',
+            bottom: '#f0eee9',
+            left: '#f0eee9',
+            pitch: '#f0eee9',
+            ceiling: '#f5f4f0'
         },
-        floorTexture: 'parquet_oak'
+        floorTexture: 'laminat_hell',
+        floorScale: 1.0
     },
     furniture: [],
     elements: [],       // doors, windows, skylights
@@ -3045,8 +3047,167 @@ const TextureGenerator = {
     }
 };
 
+// Central registry for floor and carpet textures
+const TextureRegistry = {
+    floors: [
+        {
+            id: 'laminat_hell',
+            name: 'Laminat Hell',
+            desc: 'Eiche Landhausdiele',
+            file: 'texturen/laminat_hell.jpg',
+            defaultScale: 100, // cm pro Textur-Wiederholung (Standard)
+            roughness: 0.82,
+            metalness: 0.0
+        },
+        {
+            id: 'anthrazit_holz',
+            name: 'Holzboden Anthrazit',
+            desc: 'Parkett Carbon',
+            file: 'texturen/anthrazit_holz_boden_textur.jpg',
+            defaultScale: 120, // cm pro Textur-Wiederholung
+            roughness: 0.85,
+            metalness: 0.0
+        },
+        {
+            id: 'teppich_flach',
+            name: 'Teppichboden Schlinge',
+            desc: 'Flachgewebe Anthrazit',
+            file: 'texturen/teppich_textur_flach.jpg',
+            defaultScale: 45, // cm pro Textur-Wiederholung
+            roughness: 0.96,
+            metalness: 0.0
+        },
+        {
+            id: 'teppich_hoch',
+            name: 'Teppichboden Hochflor',
+            desc: 'Shaggy Kuschelflor',
+            file: 'texturen/teppich_hoch.jpg',
+            normalMap: 'texturen/teppich_hoch_normal.jpg',
+            defaultScale: 40, // cm pro Textur-Wiederholung
+            roughness: 0.98,
+            metalness: 0.0
+        }
+    ],
+    carpets: [
+        {
+            id: 'flach',
+            aliases: ['flat', 'teppich_flach'],
+            name: 'Flachgewebe / Schlinge',
+            file: 'texturen/teppich_textur_flach.jpg',
+            defaultScale: 40, // cm pro Textur-Wiederholung
+            roughness: 0.96
+        },
+        {
+            id: 'hochflor',
+            aliases: ['shaggy', 'hoch', 'teppich_hoch'],
+            name: 'Hochflor / Shaggy',
+            file: 'texturen/teppich_hoch.jpg',
+            normalMap: 'texturen/teppich_hoch_normal.jpg',
+            defaultScale: 35, // cm pro Textur-Wiederholung
+            roughness: 0.98
+        }
+    ]
+};
+
 const TextureCache = {
+    loader: null,
     textures: {},
+    
+    getLoader() {
+        if (!this.loader) this.loader = new THREE.TextureLoader();
+        return this.loader;
+    },
+    
+    load(url) {
+        if (!url) return null;
+        if (this.textures[url]) return this.textures[url];
+        
+        const tex = this.getLoader().load(url, (loadedTex) => {
+            loadedTex.wrapS = THREE.MirroredRepeatWrapping;
+            loadedTex.wrapT = THREE.MirroredRepeatWrapping;
+            loadedTex.needsUpdate = true;
+            if (Viewer3D.renderer && Viewer3D.scene && Viewer3D.camera) {
+                Viewer3D.renderer.render(Viewer3D.scene, Viewer3D.camera);
+            }
+        });
+        tex.wrapS = THREE.MirroredRepeatWrapping;
+        tex.wrapT = THREE.MirroredRepeatWrapping;
+        this.textures[url] = tex;
+        return tex;
+    },
+    
+    getFloorTexture(id) {
+        const def = TextureRegistry.floors.find(f => f.id === id) || TextureRegistry.floors[0];
+        return {
+            map: this.load(def.file),
+            normalMap: def.normalMap ? this.load(def.normalMap) : null,
+            def: def
+        };
+    },
+    
+    getCarpetTexture(id, colorHex) {
+        const def = TextureRegistry.carpets.find(c => c.id === id || (c.aliases && c.aliases.includes(id))) || TextureRegistry.carpets[0];
+        
+        let map;
+        if (def.id === 'flach') {
+            map = this.getLightenedFlachTexture(def.file);
+        } else {
+            map = this.load(def.file);
+        }
+        
+        return {
+            map: map,
+            normalMap: def.normalMap ? this.load(def.normalMap) : null,
+            def: def
+        };
+    },
+    
+    getLightenedFlachTexture(url) {
+        const cacheKey = 'tinted_' + url;
+        if (this.textures[cacheKey]) return this.textures[cacheKey];
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.MirroredRepeatWrapping;
+        tex.wrapT = THREE.MirroredRepeatWrapping;
+        this.textures[cacheKey] = tex;
+        
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            canvas.width = img.naturalWidth || 512;
+            canvas.height = img.naturalHeight || 512;
+            ctx.drawImage(img, 0, 0);
+            try {
+                const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const d = imgData.data;
+                // Hebe dunkle Helligkeitswerte auf einen hellneutralen Grundwert an (145..240)
+                for (let i = 0; i < d.length; i += 4) {
+                    const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+                    const val = Math.min(255, Math.round(145 + lum * 1.5));
+                    d[i] = val;
+                    d[i+1] = val;
+                    d[i+2] = val;
+                }
+                ctx.putImageData(imgData, 0, 0);
+            } catch (e) {
+                // Bei Canvas Security Exception (z.B. restriktives file://) Fallback auf unverändertes Bild
+            }
+            tex.needsUpdate = true;
+            if (Viewer3D.renderer && Viewer3D.scene && Viewer3D.camera) {
+                Viewer3D.renderer.render(Viewer3D.scene, Viewer3D.camera);
+            }
+        };
+        img.src = url;
+        
+        return tex;
+    },
+    
+    // Legacy support für sonstige Möbel
     get(type, colorHex) {
         const key = type + '_' + (colorHex || '');
         if (this.textures[key]) return this.textures[key];
@@ -3058,20 +3219,6 @@ const TextureCache = {
             tex = TextureGenerator.createBrick();
         } else if (type === 'fabric') {
             tex = TextureGenerator.createFabric(colorHex || '#A89F91');
-        } else if (type === 'carpet_flat') {
-            tex = TextureGenerator.createCarpetFlat(colorHex || '#94a3b8');
-        } else if (type === 'carpet_flat_bump') {
-            tex = TextureGenerator.createCarpetFlatBump();
-        } else if (type === 'carpet_shaggy') {
-            tex = TextureGenerator.createCarpetShaggy(colorHex || '#cbd5e1');
-        } else if (type === 'carpet_shaggy_bump') {
-            tex = TextureGenerator.createCarpetShaggyBump();
-        } else if (type.startsWith('floor_') && type.endsWith('_bump')) {
-            const floorType = type.replace('floor_', '').replace('_bump', '');
-            tex = TextureGenerator.createFloorBump(floorType);
-        } else if (type.startsWith('floor_')) {
-            const floorType = type.replace('floor_', '');
-            tex = TextureGenerator.createFloorTexture(floorType);
         }
         
         if (tex) this.textures[key] = tex;
@@ -3116,27 +3263,30 @@ const Viewer3D = {
         this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 0.95;
         this.container.appendChild(this.renderer.domElement);
         
         // Orbit Controls
         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        this.controls.maxPolarAngle = Math.PI / 2 - 0.05; // prevent going under floor
-        this.controls.minDistance = 50;
-        this.controls.maxDistance = 1500;
+        this.controls.minPolarAngle = 0.03; // Vertikal nach unten blicken
+        this.controls.maxPolarAngle = Math.PI - 0.03; // Vertikal nach oben blicken (Decke / Dachschräge)
+        this.controls.minDistance = 20;
+        this.controls.maxDistance = 2500;
         
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // Lights (Soft, natural warm interior lighting)
+        const ambientLight = new THREE.AmbientLight(0xfaf5ec, 0.55);
         this.scene.add(ambientLight);
         
-        // Headlight (attached to camera to follow viewer angle)
-        this.headlight = new THREE.DirectionalLight(0xffffff, 0.75);
+        // Headlight (attached to camera to follow viewer angle) - softened for eye-comfort without harsh hot-spots
+        this.headlight = new THREE.DirectionalLight(0xfffbf2, 0.35);
         this.headlight.position.set(0, 0, 1);
         this.camera.add(this.headlight);
         this.scene.add(this.camera);
         
-        this.sunLight = new THREE.DirectionalLight(0xfffdf2, 1.25); // Warm sun light
+        this.sunLight = new THREE.DirectionalLight(0xfff8e8, 1.1); // Warm sun light
         this.sunLight.castShadow = true;
         this.sunLight.shadow.mapSize.width = 2048;
         this.sunLight.shadow.mapSize.height = 2048;
@@ -3173,13 +3323,16 @@ const Viewer3D = {
         window.addEventListener('keydown', (e) => {
             if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
             const code = e.code;
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) {
+                    e.preventDefault(); // Verhindere Browser-Scrollen bei Pfeiltasten & Leertaste
+                }
                 this.keys[code] = true;
             }
         });
         window.addEventListener('keyup', (e) => {
             const code = e.code;
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
                 this.keys[code] = false;
             }
         });
@@ -3203,12 +3356,23 @@ const Viewer3D = {
             );
             const raycaster = new THREE.Raycaster();
             raycaster.setFromCamera(mouse, this.camera);
-            const hits = raycaster.intersectObjects(this.wallMeshes, true);
+            
+            const interactables = [...this.wallMeshes];
+            if (this.ceilingMesh) interactables.push(this.ceilingMesh);
+            if (this.pitchCheekMeshes && this.pitchCheekMeshes.length > 0) interactables.push(...this.pitchCheekMeshes);
+            if (this.flatCeilingMesh) interactables.push(this.flatCeilingMesh);
+            
+            const hits = raycaster.intersectObjects(interactables, true);
             if (hits.length > 0) {
                 let obj = hits[0].object;
-                while (obj && !obj.userData.wallName && obj.parent) obj = obj.parent;
-                if (obj && obj.userData.wallName) {
-                    selectSurfaceTarget(obj.userData.wallName);
+                while (obj && !obj.userData.wallName && !obj.userData.surfaceTarget && obj.parent) {
+                    obj = obj.parent;
+                }
+                if (obj) {
+                    const target = obj.userData.wallName || obj.userData.surfaceTarget;
+                    if (target) {
+                        selectSurfaceTarget(target);
+                    }
                 }
             }
         });
@@ -3256,28 +3420,81 @@ const Viewer3D = {
     animate() {
         requestAnimationFrame(() => this.animate());
         
-        // WASD & Pfeiltasten-Steuerung der 3D-Kamera
         if (this.camera && this.controls) {
+            const moveDelta = new THREE.Vector3();
+            const speed = 2.8; // cm pro Frame - angenehm und feinfühlig steuerbar
+            
+            // 1. WASD-Steuerung: Bewegen / Laufen im Raum (Forward, Backward, Strafe Left/Right)
             const forward = new THREE.Vector3();
             this.camera.getWorldDirection(forward);
             forward.y = 0;
-            if (forward.lengthSq() > 0.001) {
+            if (forward.lengthSq() > 0.0001) {
                 forward.normalize();
-                const side = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-                
-                const moveDelta = new THREE.Vector3();
-                const speed = 5.5; // cm pro Frame
-                if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDelta.addScaledVector(forward, speed);
-                if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDelta.addScaledVector(forward, -speed);
-                if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDelta.addScaledVector(side, -speed);
-                if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDelta.addScaledVector(side, speed);
-                
-                if (moveDelta.lengthSq() > 0) {
-                    this.camera.position.add(moveDelta);
-                    this.controls.target.add(moveDelta);
+            } else {
+                // Bei Blick fast senkrecht nach oben/unten: Horizontale Vorwärtsrichtung aus Kamera-Up ableiten
+                const camUp = this.camera.up.clone().applyQuaternion(this.camera.quaternion);
+                forward.copy(camUp);
+                forward.y = 0;
+                if (forward.lengthSq() > 0.0001) {
+                    forward.normalize();
+                } else {
+                    forward.set(0, 0, -1);
                 }
             }
+            const side = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+            
+            if (this.keys['KeyW']) moveDelta.addScaledVector(forward, speed);
+            if (this.keys['KeyS']) moveDelta.addScaledVector(forward, -speed);
+            if (this.keys['KeyA']) moveDelta.addScaledVector(side, -speed);
+            if (this.keys['KeyD']) moveDelta.addScaledVector(side, speed);
+            
+            // 2. Vertikale Flugsteuerung: Leertaste = Hoch, Shift = Runter
+            if (this.keys['Space']) moveDelta.y += speed;
+            if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) {
+                if (this.camera.position.y > 15) {
+                    moveDelta.y -= speed;
+                }
+            }
+            
+            if (moveDelta.lengthSq() > 0) {
+                this.camera.position.add(moveDelta);
+                this.controls.target.add(moveDelta);
+            }
+            
+            // 3. Pfeiltasten-Steuerung: Kameraneigung (Tilt) und Blickrichtung (Turn)
+            if (this.keys['ArrowLeft'] || this.keys['ArrowRight'] || this.keys['ArrowUp'] || this.keys['ArrowDown']) {
+                const rotSpeed = 0.016; // Radian pro Frame - weichere, kontrollierte Drehung
+                
+                // Vektor von Kamera zum Blickziel (Look Vector)
+                const look = new THREE.Vector3().subVectors(this.controls.target, this.camera.position);
+                const lookDist = Math.max(50, look.length());
+                
+                let theta = Math.atan2(look.x, look.z);
+                let phi = Math.acos(Math.max(-1, Math.min(1, look.y / lookDist)));
+                
+                // Pfeil Links / Rechts: Horizontales Schwenken (Turn Left / Right)
+                if (this.keys['ArrowLeft']) theta += rotSpeed;
+                if (this.keys['ArrowRight']) theta -= rotSpeed;
+                
+                // Pfeil Oben / Unten: Vertikale Kameraneigung (Tilt Up / Down)
+                // phi = 0 ist senkrecht nach oben blicken (Decke)
+                // phi = Math.PI ist senkrecht nach unten blicken (Boden)
+                if (this.keys['ArrowUp']) phi = Math.max(0.05, phi - rotSpeed); // Nach oben neigen bis vertikal nach oben
+                if (this.keys['ArrowDown']) phi = Math.min(Math.PI - 0.05, phi + rotSpeed); // Nach unten neigen bis vertikal nach unten
+                
+                look.x = lookDist * Math.sin(phi) * Math.sin(theta);
+                look.y = lookDist * Math.cos(phi);
+                look.z = lookDist * Math.sin(phi) * Math.cos(theta);
+                
+                this.controls.target.copy(this.camera.position).add(look);
+            }
+            
             this.controls.update();
+            
+            // Kamera niemals unter den Boden fallen lassen
+            if (this.camera.position.y < 8) {
+                this.camera.position.y = 8;
+            }
         }
         
         if (this.renderer) this.renderer.render(this.scene, this.camera);
@@ -3337,6 +3554,10 @@ const Viewer3D = {
         
         if (this.floorMesh) this.scene.remove(this.floorMesh);
         if (this.ceilingMesh) this.scene.remove(this.ceilingMesh);
+        if (this.flatCeilingMesh) {
+            this.scene.remove(this.flatCeilingMesh);
+            this.flatCeilingMesh = null;
+        }
         if (this.gridHelper) this.scene.remove(this.gridHelper);
     },
     
@@ -3358,23 +3579,28 @@ const Viewer3D = {
         let floorMat;
         
         if (isTextureMode) {
-            const floorType = room.floorTexture || 'parquet_oak';
-            const floorTex = TextureCache.get('floor_' + floorType);
-            const floorBump = TextureCache.get('floor_' + floorType + '_bump');
+            const floorType = room.floorTexture || 'laminat_hell';
+            const floorInfo = TextureCache.getFloorTexture(floorType);
+            const floorDef = floorInfo.def;
+            const floorTex = floorInfo.map;
+            const floorNormal = floorInfo.normalMap;
             
-            // Texturskalierung anpassen
-            const repScale = floorType.includes('tiles') || floorType === 'concrete' ? 70 : 55;
-            const repX = Math.max(1, room.width / repScale);
-            const repY = Math.max(1, room.depth / repScale);
+            // Texturskalierung anwenden (defaultScale in cm * userScale)
+            const userScale = Math.max(0.3, Math.min(3.0, room.floorScale || 1.0));
+            const tileSize = (floorDef.defaultScale || 100) * userScale;
+            
+            const repX = Math.max(0.5, room.width / tileSize);
+            const repY = Math.max(0.5, room.depth / tileSize);
+            
             floorTex.repeat.set(repX, repY);
-            if (floorBump) floorBump.repeat.set(repX, repY);
+            if (floorNormal) floorNormal.repeat.set(repX, repY);
             
             floorMat = new THREE.MeshStandardMaterial({
                 map: floorTex,
-                bumpMap: floorBump,
-                bumpScale: floorType === 'carpet_warm' ? 0.12 : 0.06,
-                roughness: floorType === 'marble_white' ? 0.25 : (floorType === 'carpet_warm' ? 0.98 : 0.45),
-                metalness: 0.05
+                normalMap: floorNormal || null,
+                normalScale: floorNormal ? new THREE.Vector2(0.8, 0.8) : null,
+                roughness: floorDef.roughness !== undefined ? floorDef.roughness : 0.85,
+                metalness: 0.0
             });
         } else {
             floorMat = new THREE.MeshStandardMaterial({
@@ -3394,11 +3620,6 @@ const Viewer3D = {
         this.gridHelper.position.set(0, 0.1, 0);
         this.gridHelper.visible = !isTextureMode;
         this.scene.add(this.gridHelper);
-        
-        // Set orbit control target
-        if (this.controls) {
-            this.controls.target.set(0, room.height / 4, 0);
-        }
     },
     
     rebuildWalls3D() {
@@ -3550,7 +3771,7 @@ const Viewer3D = {
             let wallMat;
             if (isTextureMode) {
                 const wallColors = State.room.wallColors || {};
-                const hexColor = wallColors[spec.name] || '#f8fafc';
+                const hexColor = wallColors[spec.name] || '#f0eee9';
                 wallMat = new THREE.MeshStandardMaterial({
                     color: hexColor,
                     roughness: 0.92,
@@ -4040,10 +4261,14 @@ const Viewer3D = {
         const room = State.room;
         const offset = this.roomOffset;
         
-        // Remove old ceiling mesh if it exists
+        // Remove old ceiling meshes if they exist
         if (this.ceilingMesh) {
             this.scene.remove(this.ceilingMesh);
             this.ceilingMesh = null;
+        }
+        if (this.flatCeilingMesh) {
+            this.scene.remove(this.flatCeilingMesh);
+            this.flatCeilingMesh = null;
         }
         
         if (!wallsAnyPitch()) {
@@ -4150,15 +4375,16 @@ const Viewer3D = {
         const alphaMap = new THREE.CanvasTexture(canvas);
         
         const isTextureMode = State.settings.viewStyle3D === 'texture';
-        const ceilingColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f8fafc' : 0x334155);
+        const pitchColor = (State.room.wallColors && State.room.wallColors.pitch) || (State.room.wallColors && State.room.wallColors.top) || (isTextureMode ? '#f0eee9' : 0x334155);
+        const ceilingColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f5f4f0' : 0x334155);
         
         // Roof pitch material
         const wallMat = new THREE.MeshStandardMaterial({
-            color: isTextureMode ? ceilingColor : 0x334155,
+            color: isTextureMode ? pitchColor : 0x334155,
             transparent: false,
             opacity: 1.0,
-            roughness: 0.8,
-            metalness: 0.05,
+            roughness: 0.88,
+            metalness: 0.0,
             side: THREE.DoubleSide,
             alphaMap: alphaMap,
             alphaTest: 0.5,
@@ -4211,28 +4437,44 @@ const Viewer3D = {
         ceilGeo.computeVertexNormals();
         
         this.ceilingMesh = new THREE.Mesh(ceilGeo, wallMat);
+        this.ceilingMesh.userData = { surfaceTarget: 'pitch' };
         this.ceilingMesh.position.set(0, 0, 0); // centered
         this.ceilingMesh.castShadow = true;
         this.ceilingMesh.receiveShadow = true;
         
         this.scene.add(this.ceilingMesh);
         
-        // Im Texturmodus: Eine Deckenfläche mit BackSide einfügen (von außen transparent, von innen sichtbar)
-        if (this.flatCeilingMesh) {
-            this.scene.remove(this.flatCeilingMesh);
-            this.flatCeilingMesh = null;
-        }
+        // Im Texturmodus: Eine Deckenfläche NUR über dem flachen Deckenbereich einfügen (niemals über die Schräge überstehend)
         if (isTextureMode) {
-            const flatCeilingGeo = new THREE.PlaneGeometry(room.width, room.depth);
-            const flatCeilingMat = new THREE.MeshStandardMaterial({
-                color: ceilingColor,
-                roughness: 0.9,
-                side: THREE.BackSide // von oben durchsichtig, von unten im Raum solide Decke
-            });
-            this.flatCeilingMesh = new THREE.Mesh(flatCeilingGeo, flatCeilingMat);
-            this.flatCeilingMesh.rotation.x = Math.PI / 2;
-            this.flatCeilingMesh.position.set(0, room.height, 0);
-            this.scene.add(this.flatCeilingMesh);
+            const pLeft = (room.pitches.left && room.pitches.left.enabled) ? room.pitches.left.run : 0;
+            const pRight = (room.pitches.right && room.pitches.right.enabled) ? room.pitches.right.run : 0;
+            const pTop = (room.pitches.top && room.pitches.top.enabled) ? room.pitches.top.run : 0;
+            const pBottom = (room.pitches.bottom && room.pitches.bottom.enabled) ? room.pitches.bottom.run : 0;
+            
+            const xMin = pLeft;
+            const xMax = room.width - pRight;
+            const zMin = pTop;
+            const zMax = room.depth - pBottom;
+            
+            const flatW = xMax - xMin;
+            const flatD = zMax - zMin;
+            
+            if (flatW > 0.5 && flatD > 0.5) {
+                const flatCeilingGeo = new THREE.PlaneGeometry(flatW, flatD);
+                const flatCeilingMat = new THREE.MeshStandardMaterial({
+                    color: ceilingColor,
+                    roughness: 0.92,
+                    metalness: 0.0,
+                    side: THREE.DoubleSide
+                });
+                this.flatCeilingMesh = new THREE.Mesh(flatCeilingGeo, flatCeilingMat);
+                this.flatCeilingMesh.rotation.x = Math.PI / 2;
+                const centerX = (xMin + xMax) / 2 + offset.x;
+                const centerZ = (zMin + zMax) / 2 + offset.z;
+                this.flatCeilingMesh.position.set(centerX, room.height, centerZ);
+                this.flatCeilingMesh.userData = { surfaceTarget: 'ceiling' };
+                this.scene.add(this.flatCeilingMesh);
+            }
         }
     },
     
@@ -4245,12 +4487,12 @@ const Viewer3D = {
         const offset = this.roomOffset;
 
         const isTextureMode = State.settings.viewStyle3D === 'texture';
-        const cheekColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f8fafc' : 0x334155);
+        const cheekColor = (State.room.wallColors && State.room.wallColors.pitch) || (State.room.wallColors && State.room.wallColors.top) || (isTextureMode ? '#f0eee9' : 0x334155);
 
         const cheekMat = new THREE.MeshStandardMaterial({
             color: isTextureMode ? cheekColor : 0x334155,
-            roughness: 0.8,
-            metalness: 0.05,
+            roughness: 0.88,
+            metalness: 0.0,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
@@ -4276,6 +4518,7 @@ const Viewer3D = {
             geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
             geom.computeVertexNormals();
             const mesh = new THREE.Mesh(geom, cheekMat);
+            mesh.userData = { surfaceTarget: 'pitch' };
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             this.scene.add(mesh);
@@ -4406,22 +4649,31 @@ const Viewer3D = {
         let rugMat;
         if (f.isRug) {
             const rugColor = f.color3d || f.color || 'hsl(215, 25%, 60%)';
-            const rugTexType = f.rugTexture === 'shaggy' ? 'carpet_shaggy' : 'carpet_flat';
-            const rugTex = TextureCache.get(rugTexType, rugColor);
-            const rugBump = TextureCache.get(rugTexType + '_bump');
+            const rugTexKey = (f.rugTexture === 'shaggy' || f.rugTexture === 'hochflor') ? 'hochflor' : 'flach';
+            const carpetInfo = TextureCache.getCarpetTexture(rugTexKey, rugColor);
+            const carpetDef = carpetInfo.def;
+            const rugTex = carpetInfo.map;
+            const rugNormal = carpetInfo.normalMap;
             
-            // Texture repeat scaled to physical carpet dimensions (1 repeat per ~35cm)
-            const repX = Math.max(1, Math.round(f.w / 35));
-            const repY = Math.max(1, Math.round((f.shape === 'circle' ? f.w : f.l) / 35));
+            // Skalierung anwenden
+            const userScale = Math.max(0.3, Math.min(3.0, f.textureScale || 1.0));
+            const tileSize = (carpetDef.defaultScale || 35) * userScale;
+            
+            const repX = Math.max(0.5, f.w / tileSize);
+            const repY = Math.max(0.5, (f.shape === 'circle' ? f.w : f.l) / tileSize);
+            
             rugTex.repeat.set(repX, repY);
-            if (rugBump) rugBump.repeat.set(repX, repY);
+            if (rugNormal) rugNormal.repeat.set(repX, repY);
+            
+            const hexColor = parseColorToHex(rugColor);
             
             rugMat = new THREE.MeshStandardMaterial({
                 map: rugTex,
-                bumpMap: rugBump,
-                bumpScale: f.rugTexture === 'shaggy' ? 0.35 : 0.18,
-                roughness: 0.98,
-                metalness: 0.0
+                normalMap: rugNormal || null,
+                normalScale: rugNormal ? new THREE.Vector2(1.0, 1.0) : null,
+                color: new THREE.Color(hexColor),
+                roughness: carpetDef.roughness !== undefined ? carpetDef.roughness : 0.96,
+                metalness: 0.02
             });
         }
         
@@ -4950,8 +5202,8 @@ const Presets = {
     'custom-circle': { name: 'Rundes Custom', shape: 'circle', w: 80, l: 80, h: 80, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
     chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
     tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 },
-    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' },
-    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(30, 25%, 70%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' }
+    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', color3d: '#334155', collisionEnabled: true, isRug: true, rugTexture: 'flach', textureScale: 1.0 },
+    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(30, 25%, 70%)', color3d: '#fefae0', collisionEnabled: true, isRug: true, rugTexture: 'hochflor', textureScale: 1.0 }
 };
 
 function loadExampleRoom() {
@@ -4963,13 +5215,14 @@ function loadExampleRoom() {
     State.room.height = 250;
     
     State.room.wallColors = {
-        top: '#f8fafc',
-        right: '#f8fafc',
-        bottom: '#f8fafc',
-        left: '#f8fafc',
-        ceiling: '#ffffff'
+        top: '#f0eee9',
+        right: '#f0eee9',
+        bottom: '#f0eee9',
+        left: '#f0eee9',
+        pitch: '#f0eee9',
+        ceiling: '#f5f4f0'
     };
-    State.room.floorTexture = 'parquet_oak';
+    State.room.floorTexture = 'laminat_hell'; State.room.floorScale = 1.0;
     
     // Set Pitches
     State.room.pitches.top = { enabled: true, kniestock: 80, run: 160 };
@@ -5208,11 +5461,18 @@ function buildPropertiesPanelContent() {
                 </div>
                 ${item.isRug ? `
                 <div class="prop-field prop-span-2">
-                    <label>Teppich-Art</label>
+                    <label>Teppich-Textur</label>
                     <select id="prop-rug-texture" ${lockedAttr}>
-                        <option value="flat" ${item.rugTexture === 'flat' ? 'selected' : ''}>Flachgewebe (Flach)</option>
-                        <option value="shaggy" ${item.rugTexture === 'shaggy' ? 'selected' : ''}>Hochflorig (Kuschelig)</option>
+                        <option value="flach" ${(!item.rugTexture || item.rugTexture === 'flach' || item.rugTexture === 'flat') ? 'selected' : ''}>Flachgewebe / Schlinge</option>
+                        <option value="hochflor" ${(item.rugTexture === 'hochflor' || item.rugTexture === 'shaggy') ? 'selected' : ''}>Hochflor / Shaggy</option>
                     </select>
+                </div>
+                <div class="prop-field prop-span-2">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <label for="prop-rug-scale">Textur-Skalierung</label>
+                        <span id="prop-rug-scale-val" style="font-size: 11px; color: var(--primary-light, #a78bfa); font-weight: 600;">${Math.round((item.textureScale || 1.0) * 100)}%</span>
+                    </div>
+                    <input type="range" id="prop-rug-scale" min="30" max="300" value="${Math.round((item.textureScale || 1.0) * 100)}" step="5" ${lockedAttr}>
                 </div>
                 ` : ''}
                 <div class="prop-field prop-span-2" style="margin-top: 4px;">
@@ -5542,6 +5802,14 @@ function attachPropertiesListeners() {
         updateSelectedMesh();
     });
     
+    listenChange('prop-rug-scale', (e) => {
+        const val = parseInt(e.target.value) || 100;
+        item.textureScale = val / 100;
+        const valLabel = document.getElementById('prop-rug-scale-val');
+        if (valLabel) valLabel.textContent = val + '%';
+        updateSelectedMesh();
+    });
+    
     listenChange('prop-dist-left', (e) => {
         const val = Math.max(0, parseFloat(e.target.value) || 0);
         const w = item.w || 0;
@@ -5827,6 +6095,16 @@ function syncPropertiesPanel() {
         setVal('prop-h', item.isObstacle ? getCeilingHeightAt(item.x, item.y) : item.h);
         setVal('prop-rot', item.rotation);
         setVal('prop-elevation', item.elevation || 0);
+        
+        if (item.isRug) {
+            const rugScaleVal = Math.round((item.textureScale || 1.0) * 100);
+            const rugScaleInput = document.getElementById('prop-rug-scale');
+            const rugScaleLabel = document.getElementById('prop-rug-scale-val');
+            if (rugScaleInput) rugScaleInput.value = rugScaleVal;
+            if (rugScaleLabel) rugScaleLabel.textContent = rugScaleVal + '%';
+            const rugTexSel = document.getElementById('prop-rug-texture');
+            if (rugTexSel) rugTexSel.value = (item.rugTexture === 'shaggy' || item.rugTexture === 'hochflor') ? 'hochflor' : 'flach';
+        }
         
         if (item.tvSize !== null && item.tvSize !== undefined) {
             const tvSizeEl = document.getElementById('prop-tv-size');
@@ -6457,15 +6735,18 @@ function selectSurfaceTarget(target) {
 function setWallColor(color, target = currentSurfaceTarget) {
     History.pushState();
     if (!State.room.wallColors) {
-        State.room.wallColors = { top: '#f8fafc', right: '#f8fafc', bottom: '#f8fafc', left: '#f8fafc', ceiling: '#ffffff' };
+        State.room.wallColors = { top: '#f0eee9', right: '#f0eee9', bottom: '#f0eee9', left: '#f0eee9', pitch: '#f0eee9', ceiling: '#f5f4f0' };
     }
     if (target === 'all') {
         State.room.wallColors.top = color;
         State.room.wallColors.right = color;
         State.room.wallColors.bottom = color;
         State.room.wallColors.left = color;
+        State.room.wallColors.pitch = color;
     } else if (target === 'ceiling') {
         State.room.wallColors.ceiling = color;
+    } else if (target === 'pitch') {
+        State.room.wallColors.pitch = color;
     } else {
         State.room.wallColors[target] = color;
     }
@@ -6522,8 +6803,8 @@ function initSurfaceTabListeners() {
         btnAllWalls.addEventListener('click', () => {
             const wallColors = State.room.wallColors || {};
             const currentColor = (currentSurfaceTarget === 'all' || currentSurfaceTarget === 'ceiling') 
-                ? (wallColors.top || '#f8fafc') 
-                : (wallColors[currentSurfaceTarget] || '#f8fafc');
+                ? (wallColors.top || '#f0eee9') 
+                : (wallColors[currentSurfaceTarget] || '#f0eee9');
             setWallColor(currentColor, 'all');
         });
     }
@@ -6535,17 +6816,40 @@ function initSurfaceTabListeners() {
             setFloorTexture(floor);
         });
     });
+    
+    // Floor texture scale slider
+    const floorScaleSlider = document.getElementById('floor-texture-scale-slider');
+    const floorScaleVal = document.getElementById('floor-texture-scale-val');
+    if (floorScaleSlider) {
+        floorScaleSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value) || 100;
+            if (floorScaleVal) floorScaleVal.textContent = val + '%';
+            State.room.floorScale = val / 100;
+            Viewer3D.buildFloor3D();
+        });
+    }
+    
+    // Reset floor scale button
+    const btnResetFloorScale = document.getElementById('btn-reset-floor-scale');
+    if (btnResetFloorScale) {
+        btnResetFloorScale.addEventListener('click', () => {
+            State.room.floorScale = 1.0;
+            if (floorScaleSlider) floorScaleSlider.value = 100;
+            if (floorScaleVal) floorScaleVal.textContent = '100%';
+            Viewer3D.buildFloor3D();
+        });
+    }
 }
 
 function syncSurfaceTabUI() {
-    const wallColors = State.room.wallColors || { top: '#f8fafc', right: '#f8fafc', bottom: '#f8fafc', left: '#f8fafc', ceiling: '#ffffff' };
+    const wallColors = State.room.wallColors || { top: '#f0eee9', right: '#f0eee9', bottom: '#f0eee9', left: '#f0eee9', pitch: '#f0eee9', ceiling: '#f5f4f0' };
     const currentColor = (currentSurfaceTarget === 'all') 
-        ? wallColors.top 
-        : (wallColors[currentSurfaceTarget] || '#f8fafc');
+        ? (wallColors.pitch || wallColors.top || '#f0eee9') 
+        : (wallColors[currentSurfaceTarget] || '#f0eee9');
         
     const customColor = document.getElementById('surface-custom-color');
     const colorHexLabel = document.getElementById('surface-color-hex');
-    if (customColor) customColor.value = currentColor.startsWith('#') ? currentColor : '#f8fafc';
+    if (customColor) customColor.value = currentColor.startsWith('#') ? currentColor : '#f0eee9';
     if (colorHexLabel) colorHexLabel.textContent = currentColor;
     
     // Highlight active color dot
@@ -6558,7 +6862,7 @@ function syncSurfaceTabUI() {
     });
     
     // Highlight active floor card
-    const currentFloor = State.room.floorTexture || 'parquet_oak';
+    const currentFloor = State.room.floorTexture || 'laminat_hell';
     document.querySelectorAll('.floor-card').forEach(card => {
         if (card.dataset.floor === currentFloor) {
             card.classList.add('active');
@@ -6566,6 +6870,13 @@ function syncSurfaceTabUI() {
             card.classList.remove('active');
         }
     });
+    
+    // Sync floor scale slider
+    const currentScale = Math.round((State.room.floorScale || 1.0) * 100);
+    const floorScaleSlider = document.getElementById('floor-texture-scale-slider');
+    const floorScaleVal = document.getElementById('floor-texture-scale-val');
+    if (floorScaleSlider) floorScaleSlider.value = currentScale;
+    if (floorScaleVal) floorScaleVal.textContent = currentScale + '%';
 }
 
 function updatePlacedListsUI() {
