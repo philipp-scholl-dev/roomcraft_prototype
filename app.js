@@ -243,21 +243,21 @@ function getWallPitchHeightAt(pitch, wallName, u, d) {
     if (!inter) return H;
     const R = pitch.run;
     const hk = pitch.kniestock;
-    if (d < 0 || d >= R || u < inter.outerStart || u > inter.outerEnd) return H;
+    if (d < 0 || d >= R || R <= 0 || u < inter.outerStart || u > inter.outerEnd) return H;
+
+    let h = hk + (H - hk) * (d / R);
 
     if (u < inter.innerStart && inter.innerStart > inter.outerStart) {
         const t = (u - inter.outerStart) / (inter.innerStart - inter.outerStart);
-        if (d > R * t + 0.01) return H;
-        const h = H - (H - hk) * (t - d / R);
-        return Math.min(H, Math.max(hk, h));
+        const hStart = H - (H - hk) * t;
+        h = Math.max(h, hStart);
     }
     if (u > inter.innerEnd && inter.outerEnd > inter.innerEnd) {
         const t = (inter.outerEnd - u) / (inter.outerEnd - inter.innerEnd);
-        if (d > R * t + 0.01) return H;
-        const h = H - (H - hk) * (t - d / R);
-        return Math.min(H, Math.max(hk, h));
+        const hEnd = H - (H - hk) * t;
+        h = Math.max(h, hEnd);
     }
-    return hk + (H - hk) * (d / R);
+    return Math.min(H, Math.max(hk, h));
 }
 
 function getCeilingHeightAt(x, y) {
@@ -1140,7 +1140,6 @@ const Editor2D = {
         ctx.fillStyle = 'rgba(139, 92, 246, 0.06)'; // Light purple tint
         ctx.strokeStyle = 'rgba(139, 92, 246, 0.35)';
         ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
 
         const walls = ['top', 'right', 'bottom', 'left'];
         walls.forEach(w => {
@@ -1151,13 +1150,13 @@ const Editor2D = {
             const run = pitch.run;
             const wallLen = (w === 'top' || w === 'bottom') ? room.width : room.depth;
 
-            // Trapezoid corners in 2D room space
+            // Rectangular outer footprint [outerStart, outerEnd] x [0, run] in 2D room space
             const p0 = wallUDToRoomXY(w, inter.outerStart, 0);
-            const p1 = wallUDToRoomXY(w, inter.innerStart, run);
-            const p2 = wallUDToRoomXY(w, inter.innerEnd, run);
+            const p1 = wallUDToRoomXY(w, inter.outerStart, run);
+            const p2 = wallUDToRoomXY(w, inter.outerEnd, run);
             const p3 = wallUDToRoomXY(w, inter.outerEnd, 0);
 
-            // Fill trapezoid
+            // Fill footprint
             ctx.beginPath();
             ctx.moveTo(p0.x, p0.y);
             ctx.lineTo(p1.x, p1.y);
@@ -1166,63 +1165,95 @@ const Editor2D = {
             ctx.closePath();
             ctx.fill();
 
-            // Hatching clipped to trapezoid
+            // Directional slope contour lines (parallel to wall in main trapezoid, perpendicular to wall in slanted cheek triangles)
+            const step = 18;
             ctx.save();
-            ctx.clip();
+            ctx.setLineDash([]);
+            ctx.strokeStyle = 'rgba(139, 92, 246, 0.28)';
             ctx.beginPath();
-            const step = 12;
-            if (w === 'top' || w === 'bottom') {
-                const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
-                const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
-                const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
-                const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
-                for (let x = minX - (maxY - minY); x < maxX + (maxY - minY); x += step) {
-                    ctx.moveTo(x, minY);
-                    ctx.lineTo(x + (maxY - minY), maxY);
+
+            // 1. Main slope trapezoid lines (parallel to wall)
+            for (let d = step; d < run; d += step) {
+                const t = d / run;
+                const uLeft = inter.innerStart - (inter.innerStart - inter.outerStart) * t;
+                const uRight = inter.innerEnd + (inter.outerEnd - inter.innerEnd) * t;
+                if (uRight > uLeft) {
+                    const a = wallUDToRoomXY(w, uLeft, d);
+                    const b = wallUDToRoomXY(w, uRight, d);
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
                 }
-            } else {
-                const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
-                const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
-                const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
-                const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
-                for (let y = minY - (maxX - minX); y < maxY + (maxX - minX); y += step) {
-                    ctx.moveTo(minX, y);
-                    ctx.lineTo(maxX, y + (maxX - minX));
+            }
+
+            // 2. Start slanted cheek triangle lines (perpendicular to wall, from wall to diagonal crease)
+            if (inter.innerStart > inter.outerStart) {
+                const spanStart = inter.innerStart - inter.outerStart;
+                for (let u = inter.outerStart + step; u < inter.innerStart; u += step) {
+                    const dMax = run * (1 - (u - inter.outerStart) / spanStart);
+                    if (dMax > 0) {
+                        const a = wallUDToRoomXY(w, u, 0);
+                        const b = wallUDToRoomXY(w, u, dMax);
+                        ctx.moveTo(a.x, a.y);
+                        ctx.lineTo(b.x, b.y);
+                    }
+                }
+            }
+
+            // 3. End slanted cheek triangle lines (perpendicular to wall, from wall to diagonal crease)
+            if (inter.outerEnd > inter.innerEnd) {
+                const spanEnd = inter.outerEnd - inter.innerEnd;
+                for (let u = inter.innerEnd + step; u < inter.outerEnd; u += step) {
+                    const dMax = run * (1 - (inter.outerEnd - u) / spanEnd);
+                    if (dMax > 0) {
+                        const a = wallUDToRoomXY(w, u, 0);
+                        const b = wallUDToRoomXY(w, u, dMax);
+                        ctx.moveTo(a.x, a.y);
+                        ctx.lineTo(b.x, b.y);
+                    }
                 }
             }
             ctx.stroke();
             ctx.restore();
 
-            // Draw outline (inner slope edge + side edges + crease lines for slanted cheeks)
+            // Draw structural boundary and diagonal valley/hip crease lines
+            ctx.save();
+            ctx.strokeStyle = 'rgba(139, 92, 246, 0.55)';
+            ctx.lineWidth = 1.25;
+            ctx.setLineDash([4, 4]);
             ctx.beginPath();
+
             // Inner ceiling boundary (p1 -> p2)
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
 
-            // Start edge (p0 -> p1) if not flush with corner wall
-            if (inter.innerStart > 0) {
+            // Start outer edge (p0 -> p1) if not flush with corner wall
+            if (inter.outerStart > 0) {
                 ctx.moveTo(p0.x, p0.y);
                 ctx.lineTo(p1.x, p1.y);
             }
-            // Start crease line if slanted cheek (innerStart > outerStart)
+
+            // End outer edge (p3 -> p2) if not flush with corner wall
+            if (inter.outerEnd < wallLen) {
+                ctx.moveTo(p3.x, p3.y);
+                ctx.lineTo(p2.x, p2.y);
+            }
+            ctx.stroke();
+
+            // Solid diagonal crease lines (Grat / Kehle) between slanted cheek triangle and main slope
+            ctx.setLineDash([]);
+            ctx.beginPath();
             if (inter.innerStart > inter.outerStart) {
                 const c0 = wallUDToRoomXY(w, inter.innerStart, 0);
                 ctx.moveTo(c0.x, c0.y);
                 ctx.lineTo(p1.x, p1.y);
             }
-
-            // End edge (p3 -> p2) if not flush with corner wall
-            if (inter.innerEnd < wallLen) {
-                ctx.moveTo(p3.x, p3.y);
-                ctx.lineTo(p2.x, p2.y);
-            }
-            // End crease line if slanted cheek (outerEnd > innerEnd)
             if (inter.outerEnd > inter.innerEnd) {
                 const c1 = wallUDToRoomXY(w, inter.innerEnd, 0);
                 ctx.moveTo(c1.x, c1.y);
                 ctx.lineTo(p2.x, p2.y);
             }
             ctx.stroke();
+            ctx.restore();
         });
 
         ctx.setLineDash([]);
@@ -3448,7 +3479,10 @@ const Viewer3D = {
             color: 0x334155, // slate-700
             roughness: 0.6,
             metalness: 0.1,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1
         });
 
         const wallUDTo3D = (wallName, u, d, height) => {
@@ -3487,19 +3521,47 @@ const Viewer3D = {
             const run = pitch.run;
             const H = room.height;
 
-            // Start Cheek Triangle (vertical if outerStart === innerStart, slanted if innerStart > outerStart)
-            if (inter.innerStart > 0) {
+            // Start transition:
+            // - If innerStart > outerStart: Slanted Querschräge triangle (A-B-C) + Main-slope triangle (A-C-D) meeting along diagonal crease A->C
+            // - If innerStart === outerStart (> 0): Vertical triangular cheek wall at u = outerStart
+            if (inter.innerStart > inter.outerStart) {
+                const uInner = Math.min(inter.innerEnd, inter.innerStart + 1.5);
                 const A = wallUDTo3D(w, inter.innerStart, 0, knie);
                 const B = wallUDTo3D(w, inter.outerStart, 0, H);
-                const C = wallUDTo3D(w, inter.innerStart, run, H);
+                const C = wallUDTo3D(w, inter.outerStart, run, H);
+                const D = wallUDTo3D(w, uInner, run, H);
+                addTriangle(A, B, C);
+                addTriangle(A, C, D);
+                if (uInner > inter.innerStart) {
+                    const A2 = wallUDTo3D(w, uInner, 0, knie);
+                    addTriangle(A, D, A2);
+                }
+            } else if (inter.outerStart > 0) {
+                const A = wallUDTo3D(w, inter.outerStart, 0, knie);
+                const B = wallUDTo3D(w, inter.outerStart, 0, H);
+                const C = wallUDTo3D(w, inter.outerStart, run, H);
                 addTriangle(A, B, C);
             }
 
-            // End Cheek Triangle (vertical if innerEnd === outerEnd, slanted if outerEnd > innerEnd)
-            if (inter.innerEnd < wallLen) {
+            // End transition:
+            // - If outerEnd > innerEnd: Slanted Querschräge triangle (A-B-C) + Main-slope triangle (A-C-D) meeting along diagonal crease A->C
+            // - If innerEnd === outerEnd (< wallLen): Vertical triangular cheek wall at u = outerEnd
+            if (inter.outerEnd > inter.innerEnd) {
+                const uInner = Math.max(inter.innerStart, inter.innerEnd - 1.5);
                 const A = wallUDTo3D(w, inter.innerEnd, 0, knie);
                 const B = wallUDTo3D(w, inter.outerEnd, 0, H);
-                const C = wallUDTo3D(w, inter.innerEnd, run, H);
+                const C = wallUDTo3D(w, inter.outerEnd, run, H);
+                const D = wallUDTo3D(w, uInner, run, H);
+                addTriangle(A, B, C);
+                addTriangle(A, C, D);
+                if (uInner < inter.innerEnd) {
+                    const A2 = wallUDTo3D(w, uInner, 0, knie);
+                    addTriangle(A, D, A2);
+                }
+            } else if (inter.outerEnd < wallLen) {
+                const A = wallUDTo3D(w, inter.outerEnd, 0, knie);
+                const B = wallUDTo3D(w, inter.outerEnd, 0, H);
+                const C = wallUDTo3D(w, inter.outerEnd, run, H);
                 addTriangle(A, B, C);
             }
         });
