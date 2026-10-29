@@ -833,17 +833,19 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text, options = {}) {
         ctx.lineWidth = 0.8;
         ctx.beginPath();
         if (options.witness.top) {
-            ctx.moveTo(drawX1, 0); ctx.lineTo(drawX1, drawY1 + 3);
-            ctx.moveTo(drawX2, 0); ctx.lineTo(drawX2, drawY2 + 3);
+            ctx.moveTo(drawX1, 0); ctx.lineTo(drawX1, drawY1 - 3);
+            ctx.moveTo(drawX2, 0); ctx.lineTo(drawX2, drawY2 - 3);
         } else if (options.witness.bottom) {
-            ctx.moveTo(drawX1, options.witness.wallPos); ctx.lineTo(drawX1, drawY1 - 3);
-            ctx.moveTo(drawX2, options.witness.wallPos); ctx.lineTo(drawX2, drawY2 - 3);
+            const wPos = options.witness.wallPos !== undefined ? options.witness.wallPos : State.room.depth;
+            ctx.moveTo(drawX1, wPos); ctx.lineTo(drawX1, drawY1 + 3);
+            ctx.moveTo(drawX2, wPos); ctx.lineTo(drawX2, drawY2 + 3);
         } else if (options.witness.left) {
-            ctx.moveTo(0, drawY1); ctx.lineTo(drawX1 + 3, drawY1);
-            ctx.moveTo(0, drawY2); ctx.lineTo(drawX2 + 3, drawY2);
+            ctx.moveTo(0, drawY1); ctx.lineTo(drawX1 - 3, drawY1);
+            ctx.moveTo(0, drawY2); ctx.lineTo(drawX2 - 3, drawY2);
         } else if (options.witness.right) {
-            ctx.moveTo(options.witness.wallPos, drawY1); ctx.lineTo(drawX1 - 3, drawY1);
-            ctx.moveTo(options.witness.wallPos, drawY2); ctx.lineTo(drawX2 - 3, drawY2);
+            const wPos = options.witness.wallPos !== undefined ? options.witness.wallPos : State.room.width;
+            ctx.moveTo(wPos, drawY1); ctx.lineTo(drawX1 + 3, drawY1);
+            ctx.moveTo(wPos, drawY2); ctx.lineTo(drawX2 + 3, drawY2);
         }
         ctx.stroke();
     }
@@ -1027,9 +1029,10 @@ const Editor2D = {
     
     resetView() {
         const wrapper = this.canvas.parentElement;
-        const padding = 70; // pixels (increased to make sure dimensions are visible)
-        const scaleX = (wrapper.clientWidth - padding * 2) / State.room.width;
-        const scaleY = (wrapper.clientHeight - padding * 2) / State.room.depth;
+        const padding = 50; // pixels
+        const extraDim = 50; // cm for outer dimension lines outside walls
+        const scaleX = (wrapper.clientWidth - padding * 2) / (State.room.width + extraDim * 2);
+        const scaleY = (wrapper.clientHeight - padding * 2) / (State.room.depth + extraDim * 2);
         
         State.editor2D.zoom = Math.min(scaleX, scaleY, 1.5);
         State.editor2D.panX = (wrapper.clientWidth - State.room.width * State.editor2D.zoom) / 2;
@@ -1099,7 +1102,9 @@ const Editor2D = {
     
     drawDimensions(ctx) {
         const room = State.room;
-        const offset = 18; // Offset inside the room along inner wall (Innenbemaßung)
+        const wallThick = 10;
+        const chainOffset = wallThick + 16; // 26 cm: outer chain line
+        const totalOffset = wallThick + 34; // 44 cm: outer overall room dimension line
         
         const walls = ['top', 'right', 'bottom', 'left'];
         
@@ -1114,50 +1119,39 @@ const Editor2D = {
             }[w];
             
             if (segments.length > 0) {
-                // Element chain inside along inner wall
+                // Element chain outside the wall (Maßkette)
                 segments.forEach(seg => {
                     const text = `${seg.label}`;
                     if (w === 'top') {
-                        drawDimensionLine(ctx, seg.start, offset, seg.end, offset, text, { witness: witnessOpt });
+                        drawDimensionLine(ctx, seg.start, -chainOffset, seg.end, -chainOffset, text, { witness: witnessOpt });
                     } else if (w === 'bottom') {
-                        drawDimensionLine(ctx, seg.start, room.depth - offset, seg.end, room.depth - offset, text, { witness: witnessOpt });
+                        drawDimensionLine(ctx, seg.start, room.depth + chainOffset, seg.end, room.depth + chainOffset, text, { witness: witnessOpt });
                     } else if (w === 'left') {
-                        drawDimensionLine(ctx, offset, seg.start, offset, seg.end, text, { witness: witnessOpt });
+                        drawDimensionLine(ctx, -chainOffset, seg.start, -chainOffset, seg.end, text, { witness: witnessOpt });
                     } else if (w === 'right') {
-                        drawDimensionLine(ctx, room.width - offset, seg.start, room.width - offset, seg.end, text, { witness: witnessOpt });
+                        drawDimensionLine(ctx, room.width + chainOffset, seg.start, room.width + chainOffset, seg.end, text, { witness: witnessOpt });
                     }
                 });
-            } else {
-                // If wall has no elements: draw overall wall dimension along inner wall (top & left)
+                
+                // When wall has elements, draw overall dimension line further outside
                 if (w === 'top') {
-                    drawDimensionLine(ctx, 0, offset, room.width, offset, `${formatDim(room.width)} cm`, { witness: witnessOpt });
+                    drawDimensionLine(ctx, 0, -totalOffset, room.width, -totalOffset, `${formatDim(room.width)} cm`, { witness: witnessOpt });
+                } else if (w === 'bottom') {
+                    drawDimensionLine(ctx, 0, room.depth + totalOffset, room.width, room.depth + totalOffset, `${formatDim(room.width)} cm`, { witness: witnessOpt });
                 } else if (w === 'left') {
-                    drawDimensionLine(ctx, offset, 0, offset, room.depth, `${formatDim(room.depth)} cm`, { witness: witnessOpt });
+                    drawDimensionLine(ctx, -totalOffset, 0, -totalOffset, room.depth, `${formatDim(room.depth)} cm`, { witness: witnessOpt });
+                } else if (w === 'right') {
+                    drawDimensionLine(ctx, room.width + totalOffset, 0, room.width + totalOffset, room.depth, `${formatDim(room.depth)} cm`, { witness: witnessOpt });
+                }
+            } else {
+                // Wall has no elements: draw overall room dimension on top and left walls
+                if (w === 'top') {
+                    drawDimensionLine(ctx, 0, -chainOffset, room.width, -chainOffset, `${formatDim(room.width)} cm`, { witness: witnessOpt });
+                } else if (w === 'left') {
+                    drawDimensionLine(ctx, -chainOffset, 0, -chainOffset, room.depth, `${formatDim(room.depth)} cm`, { witness: witnessOpt });
                 }
             }
         });
-        
-        // If top wall has elements, ensure overall room width is also available as inner dimension
-        const topSegments = getWallSegments('top');
-        const bottomSegments = getWallSegments('bottom');
-        if (topSegments.length > 0) {
-            if (bottomSegments.length === 0) {
-                drawDimensionLine(ctx, 0, room.depth - offset, room.width, room.depth - offset, `${formatDim(room.width)} cm`, { witness: { bottom: true, wallPos: room.depth } });
-            } else {
-                drawDimensionLine(ctx, 0, 34, room.width, 34, `${formatDim(room.width)} cm`, { witness: { top: true } });
-            }
-        }
-        
-        // If left wall has elements, ensure overall room depth is also available as inner dimension
-        const leftSegments = getWallSegments('left');
-        const rightSegments = getWallSegments('right');
-        if (leftSegments.length > 0) {
-            if (rightSegments.length === 0) {
-                drawDimensionLine(ctx, room.width - offset, 0, room.width - offset, room.depth, `${formatDim(room.depth)} cm`, { witness: { right: true, wallPos: room.width } });
-            } else {
-                drawDimensionLine(ctx, 34, 0, 34, room.depth, `${formatDim(room.depth)} cm`, { witness: { left: true } });
-            }
-        }
     },
     
     drawGrid(ctx) {
@@ -1323,13 +1317,43 @@ const Editor2D = {
     
         drawWalls(ctx) {
         const room = State.room;
-        ctx.strokeStyle = '#334155'; // Slate wall border
-        ctx.lineWidth = 6;
-        ctx.lineJoin = 'miter';
+        const wallThick = 10;
+        
+        ctx.save();
+        
+        // 1. Fill wall mass (solid frame between outer rect and inner rect)
+        ctx.beginPath();
+        // Outer rect clockwise
+        ctx.rect(-wallThick, -wallThick, room.width + 2 * wallThick, room.depth + 2 * wallThick);
+        // Inner rect counter-clockwise (hole)
+        ctx.rect(room.width, 0, -room.width, room.depth);
+        ctx.fillStyle = '#1e293b'; // Slate-800 architectural wall fill
+        ctx.fill();
+        
+        // 2. Stroke outer boundary
+        ctx.strokeStyle = '#334155'; // Slate-700
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(-wallThick, -wallThick, room.width + 2 * wallThick, room.depth + 2 * wallThick);
+        
+        // 3. Stroke inner boundary strictly on the wall side (clipped outside room)
+        // This guarantees that the inner face of the wall sits PRECISELY on the 0 and room dimension lines,
+        // and never intrudes into the room interior or covers the grid.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-wallThick - 10, -wallThick - 10, room.width + 2 * wallThick + 20, room.depth + 2 * wallThick + 20);
+        ctx.rect(room.width, 0, -room.width, room.depth);
+        ctx.clip();
+        
+        ctx.strokeStyle = '#475569'; // Crisp inner wall border
+        ctx.lineWidth = 2.0;
         ctx.strokeRect(0, 0, room.width, room.depth);
+        ctx.restore();
+        
+        ctx.restore();
     },
     
     drawWallElements(ctx) {
+        const wallThick = 10;
         State.elements.forEach(elem => {
             const coords = getWallCoordinates(elem.wall, elem.position);
             const isSelected = State.selectedItem === elem;
@@ -1345,18 +1369,22 @@ const Editor2D = {
                 const dir = elem.direction || 'in';
                 const isIn = dir === 'in';
                 
-                // Draw clear opening on wall first so it overlaps the wall line
-                ctx.strokeStyle = '#0b0f19'; // App background to overlap wall line
-                ctx.lineWidth = 7;
+                // Clear the wall opening across wall thickness (-wallThick to 0)
+                ctx.fillStyle = '#0b0f19'; // App background to overlap wall
+                ctx.fillRect(-halfW, -wallThick - 0.5, elem.w, wallThick + 1);
+                
+                // Draw wall jambs on the sides across wall thickness
+                ctx.fillStyle = '#64748b';
+                ctx.fillRect(-halfW - 2, -wallThick, 2.5, wallThick);
+                ctx.fillRect(halfW - 0.5, -wallThick, 2.5, wallThick);
+                
+                // Thin threshold line along inner wall face (y = 0)
+                ctx.strokeStyle = '#334155';
+                ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.moveTo(-halfW, 0);
                 ctx.lineTo(halfW, 0);
                 ctx.stroke();
-                
-                // Draw wall frames
-                ctx.fillStyle = '#64748b';
-                ctx.fillRect(-halfW - 2, -3, 4, 6);
-                ctx.fillRect(halfW - 2, -3, 4, 6);
                 
                 if (elem.type === 'door') {
                     const hinge = elem.hinge || 'left';
@@ -1427,25 +1455,29 @@ const Editor2D = {
                 }
                 
             } else if (elem.type === 'window') {
-                // Clear wall below window
-                ctx.strokeStyle = '#0b0f19';
-                ctx.lineWidth = 7;
+                // Clear wall opening completely between -wallThick and 0
+                ctx.fillStyle = '#0b0f19';
+                ctx.fillRect(-halfW, -wallThick - 0.5, elem.w, wallThick + 1);
+                
+                // Draw window frame / glass in the wall cutout (-wallThick to 0)
+                ctx.fillStyle = isSelected ? 'rgba(139, 92, 246, 0.25)' : 'rgba(56, 189, 248, 0.25)';
+                ctx.fillRect(-halfW, -wallThick, elem.w, wallThick);
+                
+                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(199, 89%, 48%)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-halfW, -wallThick, elem.w, wallThick);
+                
+                // Center glass pane divider inside wall thickness
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1.2;
                 ctx.beginPath();
-                ctx.moveTo(-halfW, 0);
-                ctx.lineTo(halfW, 0);
+                ctx.moveTo(-halfW, -wallThick / 2);
+                ctx.lineTo(halfW, -wallThick / 2);
                 ctx.stroke();
                 
-                // Draw blue window lines
-                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(199, 89%, 48%)';
-                ctx.lineWidth = 2.5;
-                ctx.strokeRect(-halfW, -3, elem.w, 6);
-                
-                ctx.fillStyle = isSelected ? 'rgba(139, 92, 246, 0.2)' : 'rgba(56, 189, 248, 0.2)';
-                ctx.fillRect(-halfW, -3, elem.w, 6);
-                
-                // Middle window pane divider
-                ctx.strokeStyle = 'white';
-                ctx.lineWidth = 1;
+                // Inner sill edge (y = 0) flush with inner wall face
+                ctx.strokeStyle = '#38bdf8';
+                ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(-halfW, 0);
                 ctx.lineTo(halfW, 0);
