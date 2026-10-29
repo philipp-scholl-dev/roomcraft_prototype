@@ -189,57 +189,92 @@ function formatDim(val) {
     return Math.round(val * 10) / 10;
 }
 
-// Returns the active start/end interval [start, end] of a wall pitch in cm along the wall
+// Maps wall-local coordinates (u along wall, d perpendicular into room) to 2D room coordinates (x, y)
+function wallUDToRoomXY(wallName, u, d) {
+    const room = State.room;
+    switch (wallName) {
+        case 'top': return { x: u, y: d };
+        case 'right': return { x: room.width - d, y: u };
+        case 'bottom': return { x: room.width - u, y: room.depth - d };
+        case 'left': return { x: d, y: room.depth - u };
+    }
+}
+
+// Returns the active start/end and kniestockStart/kniestockEnd interval of a wall pitch in cm along the wall
 function getPitchInterval(pitch, wallName) {
     if (!pitch || !pitch.enabled) return null;
     const room = State.room;
     const wallLength = (wallName === 'top' || wallName === 'bottom') ? room.width : room.depth;
-    const s = Math.max(0, Math.min(wallLength, (pitch.start !== undefined && pitch.start !== null) ? pitch.start : 0));
-    const e = Math.max(s, Math.min(wallLength, (pitch.end !== undefined && pitch.end !== null) ? pitch.end : wallLength));
-    if (e <= s) return null;
-    return { start: s, end: e };
+    const rawStart = (pitch.start !== undefined && pitch.start !== null) ? pitch.start : 0;
+    const rawEnd = (pitch.end !== undefined && pitch.end !== null) ? pitch.end : wallLength;
+    const rawKnieStart = (pitch.kniestockStart !== undefined && pitch.kniestockStart !== null) ? pitch.kniestockStart : rawStart;
+    const rawKnieEnd = (pitch.kniestockEnd !== undefined && pitch.kniestockEnd !== null) ? pitch.kniestockEnd : rawEnd;
+
+    const s1 = Math.max(0, Math.min(wallLength, rawStart));
+    const e1 = Math.max(s1, Math.min(wallLength, rawEnd));
+    const s2 = Math.max(0, Math.min(wallLength, rawKnieStart));
+    const e2 = Math.max(s2, Math.min(wallLength, rawKnieEnd));
+
+    const outerStart = Math.min(s1, s2);
+    const outerEnd = Math.max(e1, e2);
+    let innerStart = Math.max(s1, s2);
+    let innerEnd = Math.min(e1, e2);
+    if (innerStart > innerEnd) {
+        const mid = (innerStart + innerEnd) / 2;
+        innerStart = mid;
+        innerEnd = mid;
+    }
+
+    if (outerEnd <= outerStart) return null;
+    return {
+        start: outerStart,
+        end: outerEnd,
+        outerStart,
+        innerStart,
+        innerEnd,
+        outerEnd
+    };
+}
+
+function getWallPitchHeightAt(pitch, wallName, u, d) {
+    const room = State.room;
+    const H = room.height;
+    const inter = getPitchInterval(pitch, wallName);
+    if (!inter) return H;
+    const R = pitch.run;
+    const hk = pitch.kniestock;
+    if (d < 0 || d >= R || u < inter.outerStart || u > inter.outerEnd) return H;
+
+    if (u < inter.innerStart && inter.innerStart > inter.outerStart) {
+        const t = (u - inter.outerStart) / (inter.innerStart - inter.outerStart);
+        if (d > R * t + 0.01) return H;
+        const h = H - (H - hk) * (t - d / R);
+        return Math.min(H, Math.max(hk, h));
+    }
+    if (u > inter.innerEnd && inter.outerEnd > inter.innerEnd) {
+        const t = (inter.outerEnd - u) / (inter.outerEnd - inter.innerEnd);
+        if (d > R * t + 0.01) return H;
+        const h = H - (H - hk) * (t - d / R);
+        return Math.min(H, Math.max(hk, h));
+    }
+    return hk + (H - hk) * (d / R);
 }
 
 function getCeilingHeightAt(x, y) {
     const room = State.room;
     let minHeight = room.height;
 
-    // Check Top Wall Pitch (y=0 is wall, pitch goes down; x is position along wall)
     if (room.pitches.top && room.pitches.top.enabled) {
-        const inter = getPitchInterval(room.pitches.top, 'top');
-        if (inter && x >= inter.start && x <= inter.end && y < room.pitches.top.run) {
-            const h = room.pitches.top.kniestock + y * ((room.height - room.pitches.top.kniestock) / room.pitches.top.run);
-            minHeight = Math.min(minHeight, h);
-        }
+        minHeight = Math.min(minHeight, getWallPitchHeightAt(room.pitches.top, 'top', x, y));
     }
-    // Check Bottom Wall Pitch (y=depth is wall, pitch goes up; pos = room.width - x)
     if (room.pitches.bottom && room.pitches.bottom.enabled) {
-        const inter = getPitchInterval(room.pitches.bottom, 'bottom');
-        const pos = room.width - x;
-        if (inter && pos >= inter.start && pos <= inter.end && (room.depth - y) < room.pitches.bottom.run) {
-            const dist = room.depth - y;
-            const h = room.pitches.bottom.kniestock + dist * ((room.height - room.pitches.bottom.kniestock) / room.pitches.bottom.run);
-            minHeight = Math.min(minHeight, h);
-        }
+        minHeight = Math.min(minHeight, getWallPitchHeightAt(room.pitches.bottom, 'bottom', room.width - x, room.depth - y));
     }
-    // Check Left Wall Pitch (x=0 is wall, pitch goes right; pos = room.depth - y)
     if (room.pitches.left && room.pitches.left.enabled) {
-        const inter = getPitchInterval(room.pitches.left, 'left');
-        const pos = room.depth - y;
-        if (inter && pos >= inter.start && pos <= inter.end && x < room.pitches.left.run) {
-            const h = room.pitches.left.kniestock + x * ((room.height - room.pitches.left.kniestock) / room.pitches.left.run);
-            minHeight = Math.min(minHeight, h);
-        }
+        minHeight = Math.min(minHeight, getWallPitchHeightAt(room.pitches.left, 'left', room.depth - y, x));
     }
-    // Check Right Wall Pitch (x=width is wall, pitch goes left; pos = y)
     if (room.pitches.right && room.pitches.right.enabled) {
-        const inter = getPitchInterval(room.pitches.right, 'right');
-        const pos = y;
-        if (inter && pos >= inter.start && pos <= inter.end && (room.width - x) < room.pitches.right.run) {
-            const dist = room.width - x;
-            const h = room.pitches.right.kniestock + dist * ((room.height - room.pitches.right.kniestock) / room.pitches.right.run);
-            minHeight = Math.min(minHeight, h);
-        }
+        minHeight = Math.min(minHeight, getWallPitchHeightAt(room.pitches.right, 'right', y, room.width - x));
     }
 
     return Math.max(0, minHeight);
@@ -704,9 +739,11 @@ function clampSkylightConstraints(elem) {
     const inter = getPitchInterval(pitch, elem.wall);
     if (!inter) return;
     
-    // Clamp along wall within pitch interval
+    // Clamp along wall within main pitch interval
     const halfW = elem.w / 2;
-    elem.position = Math.max(inter.start + halfW, Math.min(inter.end - halfW, elem.position));
+    const minPos = inter.innerStart + halfW;
+    const maxPos = Math.max(minPos, inter.innerEnd - halfW);
+    elem.position = Math.max(minPos, Math.min(maxPos, elem.position));
     
     const H = State.room.height;
     const hk = pitch.kniestock;
@@ -729,16 +766,16 @@ function clampSkylightConstraints(elem) {
 // Validates if a wall is suitable for a given element type and dimensions (preventing clipping with ceiling)
 function isValidWallForElement(item, wall, position) {
     const pos = position !== undefined ? position : item.position;
+    const halfW = (item.w || 0) / 2;
     
     // 1. Skylights must be on a slanted wall within active pitch interval
     if (item.type === 'skylight') {
         const inter = getPitchInterval(State.room.pitches[wall], wall);
         if (!inter) return false;
-        return (pos - halfW >= inter.start - 5 && pos + halfW <= inter.end + 5);
+        return (pos - halfW >= inter.outerStart - 5 && pos + halfW <= inter.outerEnd + 5);
     }
     
     // 2. Doors and windows must not exceed the ceiling height at their footprint
-    const halfW = item.w / 2;
     const topY = (item.type === 'window') 
         ? (item.sillHeight !== undefined ? item.sillHeight : 90) + item.h 
         : item.h;
@@ -1100,101 +1137,94 @@ const Editor2D = {
     
     drawRoofPitches(ctx) {
         const room = State.room;
-        ctx.fillStyle = 'rgba(139, 92, 246, 0.04)'; // Light purple tint
-        ctx.strokeStyle = 'rgba(139, 92, 246, 0.25)';
+        ctx.fillStyle = 'rgba(139, 92, 246, 0.06)'; // Light purple tint
+        ctx.strokeStyle = 'rgba(139, 92, 246, 0.35)';
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
 
-        const drawHatching = (x1, y1, x2, y2, angleRad, step = 12) => {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(x1, y1, x2 - x1, y2 - y1);
-            ctx.clip();
+        const walls = ['top', 'right', 'bottom', 'left'];
+        walls.forEach(w => {
+            const pitch = room.pitches[w];
+            const inter = getPitchInterval(pitch, w);
+            if (!inter) return;
 
+            const run = pitch.run;
+            const wallLen = (w === 'top' || w === 'bottom') ? room.width : room.depth;
+
+            // Trapezoid corners in 2D room space
+            const p0 = wallUDToRoomXY(w, inter.outerStart, 0);
+            const p1 = wallUDToRoomXY(w, inter.innerStart, run);
+            const p2 = wallUDToRoomXY(w, inter.innerEnd, run);
+            const p3 = wallUDToRoomXY(w, inter.outerEnd, 0);
+
+            // Fill trapezoid
             ctx.beginPath();
-            if (angleRad === 0 || angleRad === Math.PI) {
-                for (let x = x1 - 100; x < x2 + 100; x += step) {
-                    ctx.moveTo(x, y1);
-                    ctx.lineTo(x + (y2 - y1), y2);
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.closePath();
+            ctx.fill();
+
+            // Hatching clipped to trapezoid
+            ctx.save();
+            ctx.clip();
+            ctx.beginPath();
+            const step = 12;
+            if (w === 'top' || w === 'bottom') {
+                const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
+                const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
+                const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
+                const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
+                for (let x = minX - (maxY - minY); x < maxX + (maxY - minY); x += step) {
+                    ctx.moveTo(x, minY);
+                    ctx.lineTo(x + (maxY - minY), maxY);
                 }
             } else {
-                for (let y = y1 - 100; y < y2 + 100; y += step) {
-                    ctx.moveTo(x1, y);
-                    ctx.lineTo(x2, y + (x2 - x1));
+                const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
+                const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
+                const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
+                const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
+                for (let y = minY - (maxX - minX); y < maxY + (maxX - minX); y += step) {
+                    ctx.moveTo(minX, y);
+                    ctx.lineTo(maxX, y + (maxX - minX));
                 }
             }
             ctx.stroke();
             ctx.restore();
-        };
 
-        // Top Wall Pitch
-        const interTop = getPitchInterval(room.pitches.top, 'top');
-        if (interTop) {
-            const x1 = interTop.start;
-            const x2 = interTop.end;
-            const y1 = 0;
-            const y2 = room.pitches.top.run;
-            ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+            // Draw outline (inner slope edge + side edges + crease lines for slanted cheeks)
             ctx.beginPath();
-            ctx.moveTo(x1, y2);
-            ctx.lineTo(x2, y2);
-            if (x1 > 0) { ctx.moveTo(x1, y1); ctx.lineTo(x1, y2); }
-            if (x2 < room.width) { ctx.moveTo(x2, y1); ctx.lineTo(x2, y2); }
-            ctx.stroke();
-            drawHatching(x1, y1, x2, y2, 0);
-        }
-        
-        // Bottom Wall Pitch
-        const interBottom = getPitchInterval(room.pitches.bottom, 'bottom');
-        if (interBottom) {
-            const x1 = room.width - interBottom.end;
-            const x2 = room.width - interBottom.start;
-            const y1 = room.depth - room.pitches.bottom.run;
-            const y2 = room.depth;
-            ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y1);
-            if (interBottom.start > 0) { ctx.moveTo(x2, y1); ctx.lineTo(x2, y2); }
-            if (interBottom.end < room.width) { ctx.moveTo(x1, y1); ctx.lineTo(x1, y2); }
-            ctx.stroke();
-            drawHatching(x1, y1, x2, y2, Math.PI);
-        }
+            // Inner ceiling boundary (p1 -> p2)
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
 
-        // Left Wall Pitch
-        const interLeft = getPitchInterval(room.pitches.left, 'left');
-        if (interLeft) {
-            const y1 = room.depth - interLeft.end;
-            const y2 = room.depth - interLeft.start;
-            const x1 = 0;
-            const x2 = room.pitches.left.run;
-            ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-            ctx.beginPath();
-            ctx.moveTo(x2, y1);
-            ctx.lineTo(x2, y2);
-            if (interLeft.start > 0) { ctx.moveTo(x1, y2); ctx.lineTo(x2, y2); }
-            if (interLeft.end < room.depth) { ctx.moveTo(x1, y1); ctx.lineTo(x2, y1); }
-            ctx.stroke();
-            drawHatching(x1, y1, x2, y2, Math.PI / 2);
-        }
+            // Start edge (p0 -> p1) if not flush with corner wall
+            if (inter.innerStart > 0) {
+                ctx.moveTo(p0.x, p0.y);
+                ctx.lineTo(p1.x, p1.y);
+            }
+            // Start crease line if slanted cheek (innerStart > outerStart)
+            if (inter.innerStart > inter.outerStart) {
+                const c0 = wallUDToRoomXY(w, inter.innerStart, 0);
+                ctx.moveTo(c0.x, c0.y);
+                ctx.lineTo(p1.x, p1.y);
+            }
 
-        // Right Wall Pitch
-        const interRight = getPitchInterval(room.pitches.right, 'right');
-        if (interRight) {
-            const y1 = interRight.start;
-            const y2 = interRight.end;
-            const x1 = room.width - room.pitches.right.run;
-            const x2 = room.width;
-            ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x1, y2);
-            if (interRight.start > 0) { ctx.moveTo(x1, y1); ctx.lineTo(x2, y1); }
-            if (interRight.end < room.depth) { ctx.moveTo(x1, y2); ctx.lineTo(x2, y2); }
+            // End edge (p3 -> p2) if not flush with corner wall
+            if (inter.innerEnd < wallLen) {
+                ctx.moveTo(p3.x, p3.y);
+                ctx.lineTo(p2.x, p2.y);
+            }
+            // End crease line if slanted cheek (outerEnd > innerEnd)
+            if (inter.outerEnd > inter.innerEnd) {
+                const c1 = wallUDToRoomXY(w, inter.innerEnd, 0);
+                ctx.moveTo(c1.x, c1.y);
+                ctx.lineTo(p2.x, p2.y);
+            }
             ctx.stroke();
-            drawHatching(x1, y1, x2, y2, -Math.PI / 2);
-        }
-        
+        });
+
         ctx.setLineDash([]);
     },
     
@@ -2675,17 +2705,15 @@ const Viewer3D = {
                 if (interBottom && interBottom.start <= 0) samplePoints.push(room.depth - room.pitches.bottom.run);
             }
 
-            // 2. Pitch on this wall itself: add step boundaries
+            // 2. Pitch on this wall itself: add step/slope boundaries for outer and inner start/end
             const interSelf = getPitchInterval(room.pitches[spec.name], spec.name);
             if (interSelf) {
-                if (interSelf.start > 0) {
-                    samplePoints.push(interSelf.start + 0.01);
-                    samplePoints.push(interSelf.start - 0.01);
-                }
-                if (interSelf.end < spec.length) {
-                    samplePoints.push(interSelf.end + 0.01);
-                    samplePoints.push(interSelf.end - 0.01);
-                }
+                [interSelf.outerStart, interSelf.innerStart, interSelf.innerEnd, interSelf.outerEnd].forEach(pt => {
+                    if (pt > 0 && pt < spec.length) {
+                        samplePoints.push(pt + 0.01);
+                        samplePoints.push(pt - 0.01);
+                    }
+                });
             }
             
             // Filter points within range, sort descending, and add unique entries
@@ -3229,7 +3257,7 @@ const Viewer3D = {
     },
     
     buildCeilingRoof3D() {
-        // Render slanted ceiling surfaces as a unified parametric grid mesh
+        // Render main slanted ceiling surfaces as a unified parametric grid mesh
         const room = State.room;
         const offset = this.roomOffset;
         
@@ -3243,44 +3271,44 @@ const Viewer3D = {
             return;
         }
         
-        // Create an alpha map to render active pitch areas solid and cut out skylights
+        // Create an alpha map to render active main pitch areas [innerStart, innerEnd] solid and cut out skylights
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 512;
         const ctx = canvas.getContext('2d');
         
-        // Fill black by default (transparent for flat ceiling)
+        // Fill black by default (transparent for flat ceiling and cheek regions)
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, 512, 512);
         
-        // Fill white for active roof pitch areas (solid, visible slant surfaces)
+        // Fill white for main rectangular roof pitch areas [innerStart, innerEnd]
         ctx.fillStyle = '#ffffff';
         const interTop = getPitchInterval(room.pitches.top, 'top');
-        if (interTop) {
-            const x = (interTop.start / room.width) * 512;
-            const w = ((interTop.end - interTop.start) / room.width) * 512;
+        if (interTop && interTop.innerEnd > interTop.innerStart) {
+            const x = (interTop.innerStart / room.width) * 512;
+            const w = ((interTop.innerEnd - interTop.innerStart) / room.width) * 512;
             const h = (room.pitches.top.run / room.depth) * 512;
             ctx.fillRect(x, 0, w, h);
         }
         const interBottom = getPitchInterval(room.pitches.bottom, 'bottom');
-        if (interBottom) {
-            const x = ((room.width - interBottom.end) / room.width) * 512;
-            const w = ((interBottom.end - interBottom.start) / room.width) * 512;
+        if (interBottom && interBottom.innerEnd > interBottom.innerStart) {
+            const x = ((room.width - interBottom.innerEnd) / room.width) * 512;
+            const w = ((interBottom.innerEnd - interBottom.innerStart) / room.width) * 512;
             const y = ((room.depth - room.pitches.bottom.run) / room.depth) * 512;
             const h = (room.pitches.bottom.run / room.depth) * 512;
             ctx.fillRect(x, y, w, h);
         }
         const interLeft = getPitchInterval(room.pitches.left, 'left');
-        if (interLeft) {
-            const y = ((room.depth - interLeft.end) / room.depth) * 512;
-            const h = ((interLeft.end - interLeft.start) / room.depth) * 512;
+        if (interLeft && interLeft.innerEnd > interLeft.innerStart) {
+            const y = ((room.depth - interLeft.innerEnd) / room.depth) * 512;
+            const h = ((interLeft.innerEnd - interLeft.innerStart) / room.depth) * 512;
             const w = (room.pitches.left.run / room.width) * 512;
             ctx.fillRect(0, y, w, h);
         }
         const interRight = getPitchInterval(room.pitches.right, 'right');
-        if (interRight) {
-            const y = (interRight.start / room.depth) * 512;
-            const h = ((interRight.end - interRight.start) / room.depth) * 512;
+        if (interRight && interRight.innerEnd > interRight.innerStart) {
+            const y = (interRight.innerStart / room.depth) * 512;
+            const h = ((interRight.innerEnd - interRight.innerStart) / room.depth) * 512;
             const x = ((room.width - room.pitches.right.run) / room.width) * 512;
             const w = (room.pitches.right.run / room.width) * 512;
             ctx.fillRect(x, y, w, h);
@@ -3363,21 +3391,38 @@ const Viewer3D = {
         // Rotate the plane to be horizontal (default PlaneGeometry is vertical in X-Y)
         ceilGeo.rotateX(-Math.PI / 2);
         
-        // Displace the Y coordinate of each vertex based on getCeilingHeightAt
+        // Displace the Y coordinate of each vertex using the main slope planes so edges at innerStart/innerEnd are crisp and unwarped
+        const getMainSlopeHeightAt = (x, y) => {
+            let minH = room.height;
+            const margin = 15;
+            if (interTop && x >= interTop.innerStart - margin && x <= interTop.innerEnd + margin && y < room.pitches.top.run) {
+                const h = room.pitches.top.kniestock + y * ((room.height - room.pitches.top.kniestock) / room.pitches.top.run);
+                minH = Math.min(minH, h);
+            }
+            if (interBottom && (room.width - x) >= interBottom.innerStart - margin && (room.width - x) <= interBottom.innerEnd + margin && (room.depth - y) < room.pitches.bottom.run) {
+                const dist = room.depth - y;
+                const h = room.pitches.bottom.kniestock + dist * ((room.height - room.pitches.bottom.kniestock) / room.pitches.bottom.run);
+                minH = Math.min(minH, h);
+            }
+            if (interLeft && (room.depth - y) >= interLeft.innerStart - margin && (room.depth - y) <= interLeft.innerEnd + margin && x < room.pitches.left.run) {
+                const h = room.pitches.left.kniestock + x * ((room.height - room.pitches.left.kniestock) / room.pitches.left.run);
+                minH = Math.min(minH, h);
+            }
+            if (interRight && y >= interRight.innerStart - margin && y <= interRight.innerEnd + margin && (room.width - x) < room.pitches.right.run) {
+                const dist = room.width - x;
+                const h = room.pitches.right.kniestock + dist * ((room.height - room.pitches.right.kniestock) / room.pitches.right.run);
+                minH = Math.min(minH, h);
+            }
+            return Math.max(0, minH);
+        };
+
         const posAttr = ceilGeo.attributes.position;
         for (let i = 0; i < posAttr.count; i++) {
             const localX = posAttr.getX(i);
             const localZ = posAttr.getZ(i);
-            
-            // Map from local centered coordinates to room coordinates [0, width] and [0, depth]
             const roomX = localX + room.width / 2;
             const roomY = localZ + room.depth / 2;
-            
-            // Get ceiling height at this specific coordinate
-            const h = getCeilingHeightAt(roomX, roomY);
-            
-            // Set the Y coordinate of the vertex
-            posAttr.setY(i, h);
+            posAttr.setY(i, getMainSlopeHeightAt(roomX, roomY));
         }
         
         // Recalculate normals so lighting works correctly on the slanted parts
@@ -3406,6 +3451,15 @@ const Viewer3D = {
             side: THREE.DoubleSide
         });
 
+        const wallUDTo3D = (wallName, u, d, height) => {
+            const pt2d = wallUDToRoomXY(wallName, u, d);
+            return {
+                x: pt2d.x + offset.x,
+                y: height,
+                z: pt2d.y + offset.z
+            };
+        };
+
         const addTriangle = (p1, p2, p3) => {
             const geom = new THREE.BufferGeometry();
             const vertices = new Float32Array([
@@ -3422,101 +3476,33 @@ const Viewer3D = {
             this.pitchCheekMeshes.push(mesh);
         };
 
-        // 1. Top Wall Pitch
-        const interTop = getPitchInterval(room.pitches.top, 'top');
-        if (interTop) {
-            const knie = room.pitches.top.kniestock;
-            const run = room.pitches.top.run;
-            const H = room.height;
-            if (interTop.start > 0) {
-                const x = interTop.start + offset.x;
-                addTriangle(
-                    { x: x, y: knie, z: 0 + offset.z },
-                    { x: x, y: H, z: 0 + offset.z },
-                    { x: x, y: H, z: run + offset.z }
-                );
-            }
-            if (interTop.end < room.width) {
-                const x = interTop.end + offset.x;
-                addTriangle(
-                    { x: x, y: knie, z: 0 + offset.z },
-                    { x: x, y: H, z: 0 + offset.z },
-                    { x: x, y: H, z: run + offset.z }
-                );
-            }
-        }
+        const walls = ['top', 'right', 'bottom', 'left'];
+        walls.forEach(w => {
+            const pitch = room.pitches[w];
+            const inter = getPitchInterval(pitch, w);
+            if (!inter) return;
 
-        // 2. Right Wall Pitch
-        const interRight = getPitchInterval(room.pitches.right, 'right');
-        if (interRight) {
-            const knie = room.pitches.right.kniestock;
-            const run = room.pitches.right.run;
+            const wallLen = (w === 'top' || w === 'bottom') ? room.width : room.depth;
+            const knie = pitch.kniestock;
+            const run = pitch.run;
             const H = room.height;
-            if (interRight.start > 0) {
-                const z = interRight.start + offset.z;
-                addTriangle(
-                    { x: room.width + offset.x, y: knie, z: z },
-                    { x: room.width + offset.x, y: H, z: z },
-                    { x: (room.width - run) + offset.x, y: H, z: z }
-                );
-            }
-            if (interRight.end < room.depth) {
-                const z = interRight.end + offset.z;
-                addTriangle(
-                    { x: room.width + offset.x, y: knie, z: z },
-                    { x: room.width + offset.x, y: H, z: z },
-                    { x: (room.width - run) + offset.x, y: H, z: z }
-                );
-            }
-        }
 
-        // 3. Bottom Wall Pitch
-        const interBottom = getPitchInterval(room.pitches.bottom, 'bottom');
-        if (interBottom) {
-            const knie = room.pitches.bottom.kniestock;
-            const run = room.pitches.bottom.run;
-            const H = room.height;
-            if (interBottom.start > 0) {
-                const x = (room.width - interBottom.start) + offset.x;
-                addTriangle(
-                    { x: x, y: knie, z: room.depth + offset.z },
-                    { x: x, y: H, z: room.depth + offset.z },
-                    { x: x, y: H, z: (room.depth - run) + offset.z }
-                );
+            // Start Cheek Triangle (vertical if outerStart === innerStart, slanted if innerStart > outerStart)
+            if (inter.innerStart > 0) {
+                const A = wallUDTo3D(w, inter.innerStart, 0, knie);
+                const B = wallUDTo3D(w, inter.outerStart, 0, H);
+                const C = wallUDTo3D(w, inter.innerStart, run, H);
+                addTriangle(A, B, C);
             }
-            if (interBottom.end < room.width) {
-                const x = (room.width - interBottom.end) + offset.x;
-                addTriangle(
-                    { x: x, y: knie, z: room.depth + offset.z },
-                    { x: x, y: H, z: room.depth + offset.z },
-                    { x: x, y: H, z: (room.depth - run) + offset.z }
-                );
-            }
-        }
 
-        // 4. Left Wall Pitch
-        const interLeft = getPitchInterval(room.pitches.left, 'left');
-        if (interLeft) {
-            const knie = room.pitches.left.kniestock;
-            const run = room.pitches.left.run;
-            const H = room.height;
-            if (interLeft.start > 0) {
-                const z = (room.depth - interLeft.start) + offset.z;
-                addTriangle(
-                    { x: 0 + offset.x, y: knie, z: z },
-                    { x: 0 + offset.x, y: H, z: z },
-                    { x: run + offset.x, y: H, z: z }
-                );
+            // End Cheek Triangle (vertical if innerEnd === outerEnd, slanted if outerEnd > innerEnd)
+            if (inter.innerEnd < wallLen) {
+                const A = wallUDTo3D(w, inter.innerEnd, 0, knie);
+                const B = wallUDTo3D(w, inter.outerEnd, 0, H);
+                const C = wallUDTo3D(w, inter.innerEnd, run, H);
+                addTriangle(A, B, C);
             }
-            if (interLeft.end < room.depth) {
-                const z = (room.depth - interLeft.end) + offset.z;
-                addTriangle(
-                    { x: 0 + offset.x, y: knie, z: z },
-                    { x: 0 + offset.x, y: H, z: z },
-                    { x: run + offset.x, y: H, z: z }
-                );
-            }
-        }
+        });
     },
     
         buildDetailedFurniture(f, group, isColliding) {
@@ -5082,32 +5068,56 @@ function initUIEvents() {
             if (Viewer3D.renderer) Viewer3D.rebuildWalls3D();
         };
         
+        knieInput.addEventListener('input', updateValues);
         knieInput.addEventListener('change', updateValues);
         runInput.addEventListener('input', updateValues);
+        runInput.addEventListener('change', updateValues);
         
         const startInput = document.getElementById(`pitch-${w}-start`);
         const endInput = document.getElementById(`pitch-${w}-end`);
+        const knieStartInput = document.getElementById(`pitch-${w}-kniestock-start`);
+        const knieEndInput = document.getElementById(`pitch-${w}-kniestock-end`);
         
         if (startInput && endInput) {
-            const updateInterval = () => {
+            const updateInterval = (syncDOM) => {
                 const wallLen = (w === 'top' || w === 'bottom') ? State.room.width : State.room.depth;
                 let s = parseFloat(startInput.value);
                 let e = parseFloat(endInput.value);
+                let ks = knieStartInput ? parseFloat(knieStartInput.value) : s;
+                let ke = knieEndInput ? parseFloat(knieEndInput.value) : e;
+
                 if (isNaN(s)) s = 0;
                 if (isNaN(e)) e = wallLen;
-                s = Math.max(0, Math.min(wallLen - 10, s));
-                e = Math.max(s + 10, Math.min(wallLen, e));
+                if (isNaN(ks)) ks = s;
+                if (isNaN(ke)) ke = e;
+
+                s = Math.max(0, Math.min(wallLen, s));
+                e = Math.max(0, Math.min(wallLen, e));
+                ks = Math.max(0, Math.min(wallLen, ks));
+                ke = Math.max(0, Math.min(wallLen, ke));
+
                 State.room.pitches[w].start = s;
                 State.room.pitches[w].end = e;
-                startInput.value = s;
-                endInput.value = e;
+                State.room.pitches[w].kniestockStart = ks;
+                State.room.pitches[w].kniestockEnd = ke;
+
+                if (syncDOM === true) {
+                    startInput.value = s;
+                    endInput.value = e;
+                    if (knieStartInput) knieStartInput.value = ks;
+                    if (knieEndInput) knieEndInput.value = ke;
+                }
                 
                 CollisionEngine.updateAllCollisions();
                 Editor2D.draw();
                 if (Viewer3D.renderer) Viewer3D.rebuildWalls3D();
             };
-            startInput.addEventListener('change', updateInterval);
-            endInput.addEventListener('change', updateInterval);
+
+            [startInput, endInput, knieStartInput, knieEndInput].forEach(inp => {
+                if (!inp) return;
+                inp.addEventListener('input', () => updateInterval(false));
+                inp.addEventListener('change', () => updateInterval(true));
+            });
         }
     });
     
@@ -5506,16 +5516,31 @@ function syncRoomInputsUI() {
         const runEl = document.getElementById(`pitch-${w}-run`);
         const startEl = document.getElementById(`pitch-${w}-start`);
         const endEl = document.getElementById(`pitch-${w}-end`);
+        const knieStartEl = document.getElementById(`pitch-${w}-kniestock-start`);
+        const knieEndEl = document.getElementById(`pitch-${w}-kniestock-end`);
         
+        const sVal = (pitch.start !== undefined && pitch.start !== null) ? pitch.start : 0;
+        const eVal = (pitch.end !== undefined && pitch.end !== null) ? pitch.end : wallLen;
+        const ksVal = (pitch.kniestockStart !== undefined && pitch.kniestockStart !== null) ? pitch.kniestockStart : sVal;
+        const keVal = (pitch.kniestockEnd !== undefined && pitch.kniestockEnd !== null) ? pitch.kniestockEnd : eVal;
+
         if (knieEl) knieEl.value = pitch.kniestock;
         if (runEl) runEl.value = pitch.run;
         if (startEl) {
-            startEl.max = wallLen - 10;
-            startEl.value = (pitch.start !== undefined && pitch.start !== null) ? pitch.start : 0;
+            startEl.max = wallLen;
+            startEl.value = sVal;
         }
         if (endEl) {
             endEl.max = wallLen;
-            endEl.value = (pitch.end !== undefined && pitch.end !== null) ? pitch.end : wallLen;
+            endEl.value = eVal;
+        }
+        if (knieStartEl) {
+            knieStartEl.max = wallLen;
+            knieStartEl.value = ksVal;
+        }
+        if (knieEndEl) {
+            knieEndEl.max = wallLen;
+            knieEndEl.value = keVal;
         }
     });
     
