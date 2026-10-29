@@ -3055,7 +3055,7 @@ const TextureRegistry = {
             name: 'Laminat Hell',
             desc: 'Eiche Landhausdiele',
             file: 'texturen/laminat_hell.jpg',
-            defaultScale: 100, // cm pro Textur-Wiederholung (Standard)
+            defaultScale: 160, // cm pro Textur-Breite (natürliche Dielenbreite)
             roughness: 0.82,
             metalness: 0.0
         },
@@ -3064,7 +3064,7 @@ const TextureRegistry = {
             name: 'Holzboden Anthrazit',
             desc: 'Parkett Carbon',
             file: 'texturen/anthrazit_holz_boden_textur.jpg',
-            defaultScale: 120, // cm pro Textur-Wiederholung
+            defaultScale: 180, // cm pro Textur-Breite
             roughness: 0.85,
             metalness: 0.0
         },
@@ -3073,7 +3073,7 @@ const TextureRegistry = {
             name: 'Teppichboden Schlinge',
             desc: 'Flachgewebe Anthrazit',
             file: 'texturen/teppich_textur_flach.jpg',
-            defaultScale: 45, // cm pro Textur-Wiederholung
+            defaultScale: 60, // cm pro Textur-Wiederholung
             roughness: 0.96,
             metalness: 0.0
         },
@@ -3083,7 +3083,7 @@ const TextureRegistry = {
             desc: 'Shaggy Kuschelflor',
             file: 'texturen/teppich_hoch.jpg',
             normalMap: 'texturen/teppich_hoch_normal.jpg',
-            defaultScale: 40, // cm pro Textur-Wiederholung
+            defaultScale: 55, // cm pro Textur-Wiederholung
             roughness: 0.98,
             metalness: 0.0
         }
@@ -3094,7 +3094,7 @@ const TextureRegistry = {
             aliases: ['flat', 'teppich_flach'],
             name: 'Flachgewebe / Schlinge',
             file: 'texturen/teppich_textur_flach.jpg',
-            defaultScale: 40, // cm pro Textur-Wiederholung
+            defaultScale: 50, // cm pro Textur-Wiederholung
             roughness: 0.96
         },
         {
@@ -3103,7 +3103,7 @@ const TextureRegistry = {
             name: 'Hochflor / Shaggy',
             file: 'texturen/teppich_hoch.jpg',
             normalMap: 'texturen/teppich_hoch_normal.jpg',
-            defaultScale: 35, // cm pro Textur-Wiederholung
+            defaultScale: 45, // cm pro Textur-Wiederholung
             roughness: 0.98
         }
     ]
@@ -3118,29 +3118,121 @@ const TextureCache = {
         return this.loader;
     },
     
-    load(url) {
+    // Weicher nahtloser Blend-Übergang über die Kanten der Textur (verhindert harte Kanten bei Wiederholung)
+    applySeamlessBlend(ctx, W, H) {
+        try {
+            const imgData = ctx.getImageData(0, 0, W, H);
+            const data = imgData.data;
+            
+            // Weicher Blend-Übergang über ca. 5% der Texturbreite/-höhe
+            const Bx = Math.max(16, Math.min(128, Math.round(W * 0.05)));
+            const By = Math.max(16, Math.min(128, Math.round(H * 0.05)));
+            
+            // 1. Horizontaler nahtloser Übergang (links k=0..Bx mit rechts k=0..Bx)
+            for (let y = 0; y < H; y++) {
+                const rowOffset = y * W * 4;
+                for (let k = 0; k < Bx; k++) {
+                    const t = 0.5 + 0.5 * (1 - Math.cos((Math.PI * k) / Bx)) * 0.5;
+                    const leftIdx = rowOffset + k * 4;
+                    const rightIdx = rowOffset + (W - 1 - k) * 4;
+                    
+                    const rL = data[leftIdx];
+                    const gL = data[leftIdx + 1];
+                    const bL = data[leftIdx + 2];
+                    
+                    const rR = data[rightIdx];
+                    const gR = data[rightIdx + 1];
+                    const bR = data[rightIdx + 2];
+                    
+                    data[leftIdx]     = Math.round(t * rL + (1 - t) * rR);
+                    data[leftIdx + 1] = Math.round(t * gL + (1 - t) * gR);
+                    data[leftIdx + 2] = Math.round(t * bL + (1 - t) * bR);
+                    
+                    data[rightIdx]     = Math.round(t * rR + (1 - t) * rL);
+                    data[rightIdx + 1] = Math.round(t * gR + (1 - t) * gL);
+                    data[rightIdx + 2] = Math.round(t * bR + (1 - t) * bL);
+                }
+            }
+            
+            // 2. Vertikaler nahtloser Übergang (oben k=0..By mit unten k=0..By)
+            for (let k = 0; k < By; k++) {
+                const t = 0.5 + 0.5 * (1 - Math.cos((Math.PI * k) / By)) * 0.5;
+                const topRow = k * W * 4;
+                const botRow = (H - 1 - k) * W * 4;
+                for (let x = 0; x < W; x++) {
+                    const topIdx = topRow + x * 4;
+                    const botIdx = botRow + x * 4;
+                    
+                    const rT = data[topIdx];
+                    const gT = data[topIdx + 1];
+                    const bT = data[topIdx + 2];
+                    
+                    const rB = data[botIdx];
+                    const gB = data[botIdx + 1];
+                    const bB = data[botIdx + 2];
+                    
+                    data[topIdx]     = Math.round(t * rT + (1 - t) * rB);
+                    data[topIdx + 1] = Math.round(t * gT + (1 - t) * gB);
+                    data[topIdx + 2] = Math.round(t * bT + (1 - t) * bB);
+                    
+                    data[botIdx]     = Math.round(t * rB + (1 - t) * rT);
+                    data[botIdx + 1] = Math.round(t * gB + (1 - t) * gT);
+                    data[botIdx + 2] = Math.round(t * bB + (1 - t) * bT);
+                }
+            }
+            
+            ctx.putImageData(imgData, 0, 0);
+        } catch (e) {
+            // Falls lokales Canvas-Sicherheitseinschränkung greift, Originalbild beibehalten
+        }
+    },
+    
+    load(url, seamless = false) {
         if (!url) return null;
-        if (this.textures[url]) return this.textures[url];
+        const cacheKey = (seamless ? 'seamless_' : '') + url;
+        if (this.textures[cacheKey]) return this.textures[cacheKey];
         
-        const tex = this.getLoader().load(url, (loadedTex) => {
-            loadedTex.wrapS = THREE.MirroredRepeatWrapping;
-            loadedTex.wrapT = THREE.MirroredRepeatWrapping;
-            loadedTex.needsUpdate = true;
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#b0b5be';
+        ctx.fillRect(0, 0, 64, 64);
+        
+        // Immer echtes RepeatWrapping nutzen – NIEMALS spiegeln (MirroredRepeatWrapping),
+        // damit Dielen und Maserungen immer in dieselbe Richtung parallel laufen
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        this.textures[cacheKey] = tex;
+        
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            canvas.width = img.naturalWidth || 1024;
+            canvas.height = img.naturalHeight || 1024;
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            
+            if (seamless) {
+                this.applySeamlessBlend(ctx, canvas.width, canvas.height);
+            }
+            
+            tex.needsUpdate = true;
             if (Viewer3D.renderer && Viewer3D.scene && Viewer3D.camera) {
+                Viewer3D.buildFloor3D();
                 Viewer3D.renderer.render(Viewer3D.scene, Viewer3D.camera);
             }
-        });
-        tex.wrapS = THREE.MirroredRepeatWrapping;
-        tex.wrapT = THREE.MirroredRepeatWrapping;
-        this.textures[url] = tex;
+        };
+        img.src = url;
+        
         return tex;
     },
     
     getFloorTexture(id) {
         const def = TextureRegistry.floors.find(f => f.id === id) || TextureRegistry.floors[0];
         return {
-            map: this.load(def.file),
-            normalMap: def.normalMap ? this.load(def.normalMap) : null,
+            map: this.load(def.file, true),
+            normalMap: def.normalMap ? this.load(def.normalMap, true) : null,
             def: def
         };
     },
@@ -3152,12 +3244,12 @@ const TextureCache = {
         if (def.id === 'flach') {
             map = this.getLightenedFlachTexture(def.file);
         } else {
-            map = this.load(def.file);
+            map = this.load(def.file, true);
         }
         
         return {
             map: map,
-            normalMap: def.normalMap ? this.load(def.normalMap) : null,
+            normalMap: def.normalMap ? this.load(def.normalMap, true) : null,
             def: def
         };
     },
@@ -3172,8 +3264,8 @@ const TextureCache = {
         const ctx = canvas.getContext('2d');
         
         const tex = new THREE.CanvasTexture(canvas);
-        tex.wrapS = THREE.MirroredRepeatWrapping;
-        tex.wrapT = THREE.MirroredRepeatWrapping;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
         this.textures[cacheKey] = tex;
         
         const img = new Image();
@@ -3194,6 +3286,7 @@ const TextureCache = {
                     d[i+2] = val;
                 }
                 ctx.putImageData(imgData, 0, 0);
+                this.applySeamlessBlend(ctx, canvas.width, canvas.height);
             } catch (e) {
                 // Bei Canvas Security Exception (z.B. restriktives file://) Fallback auf unverändertes Bild
             }
@@ -3587,10 +3680,18 @@ const Viewer3D = {
             
             // Texturskalierung anwenden (defaultScale in cm * userScale)
             const userScale = Math.max(0.3, Math.min(3.0, room.floorScale || 1.0));
-            const tileSize = (floorDef.defaultScale || 100) * userScale;
+            const tileSize = (floorDef.defaultScale || 160) * userScale;
             
-            const repX = Math.max(0.5, room.width / tileSize);
-            const repY = Math.max(0.5, room.depth / tileSize);
+            // Aspektverhältnis des Texturbildes berücksichtigen für unverzerrte, natürliche Dielenproportionen
+            let aspect = 1.79;
+            if (floorTex && floorTex.image && floorTex.image.width && floorTex.image.height) {
+                aspect = floorTex.image.width / floorTex.image.height;
+            }
+            const tileSizeX = tileSize;
+            const tileSizeY = tileSize / aspect;
+            
+            const repX = Math.max(0.2, room.width / tileSizeX);
+            const repY = Math.max(0.2, room.depth / tileSizeY);
             
             floorTex.repeat.set(repX, repY);
             if (floorNormal) floorNormal.repeat.set(repX, repY);
