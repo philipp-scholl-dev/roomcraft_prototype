@@ -799,8 +799,8 @@ function isValidWallForElement(item, wall, position) {
     return true;
 }
 
-// Helper to draw a single parallel dimension line with architectural ticks and centered text
-function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
+// Helper to draw a single parallel dimension line with architectural ticks, witness lines and centered text
+function drawDimensionLine(ctx, x1, y1, x2, y2, text, options = {}) {
     if (Math.abs(x1 - x2) < 0.1 && Math.abs(y1 - y2) < 0.1) return;
     
     // Ensure we always draw from left-to-right, or if vertical, from top-to-bottom
@@ -820,6 +820,28 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
     }
     
     ctx.save();
+    
+    // Witness lines (Hilfsmaßlinien) from inner wall surface to dimension line
+    if (options.witness) {
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        if (options.witness.top) {
+            ctx.moveTo(drawX1, 0); ctx.lineTo(drawX1, drawY1 + 3);
+            ctx.moveTo(drawX2, 0); ctx.lineTo(drawX2, drawY2 + 3);
+        } else if (options.witness.bottom) {
+            ctx.moveTo(drawX1, options.witness.wallPos); ctx.lineTo(drawX1, drawY1 - 3);
+            ctx.moveTo(drawX2, options.witness.wallPos); ctx.lineTo(drawX2, drawY2 - 3);
+        } else if (options.witness.left) {
+            ctx.moveTo(0, drawY1); ctx.lineTo(drawX1 + 3, drawY1);
+            ctx.moveTo(0, drawY2); ctx.lineTo(drawX2 + 3, drawY2);
+        } else if (options.witness.right) {
+            ctx.moveTo(options.witness.wallPos, drawY1); ctx.lineTo(drawX1 - 3, drawY1);
+            ctx.moveTo(options.witness.wallPos, drawY2); ctx.lineTo(drawX2 - 3, drawY2);
+        }
+        ctx.stroke();
+    }
+    
     ctx.strokeStyle = '#64748b'; // Slate-500
     ctx.lineWidth = 1.0;
     ctx.fillStyle = '#cbd5e1'; // Slate-300
@@ -848,14 +870,20 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text) {
     drawTick(drawX1, drawY1);
     drawTick(drawX2, drawY2);
     
-    // Draw Text
+    // Draw Text with background mask to avoid overlapping lines/grid
     const midX = (drawX1 + drawX2) / 2;
     const midY = (drawY1 + drawY2) / 2;
     const angle = Math.atan2(drawY2 - drawY1, drawX2 - drawX1);
     
     ctx.translate(midX, midY);
     ctx.rotate(angle);
-    ctx.fillText(text, 0, -6);
+    
+    const metrics = ctx.measureText(text);
+    ctx.fillStyle = '#0b0f19'; // App background to cleanly mask dimension line under text
+    ctx.fillRect(-metrics.width / 2 - 3, -6, metrics.width + 6, 12);
+    
+    ctx.fillStyle = '#cbd5e1'; // Slate-300
+    ctx.fillText(text, 0, 0);
     
     ctx.restore();
 }
@@ -1065,37 +1093,65 @@ const Editor2D = {
     
     drawDimensions(ctx) {
         const room = State.room;
+        const offset = 18; // Offset inside the room along inner wall (Innenbemaßung)
         
-        // 1. Overall Room Dimensions (draw outer lines)
-        // Top wall overall width (Nord)
-        drawDimensionLine(ctx, 0, -38, room.width, -38, `${formatDim(room.width)} cm`);
-        // Left wall overall depth (West)
-        drawDimensionLine(ctx, -38, room.depth, -38, 0, `${formatDim(room.depth)} cm`);
-        
-        // 2. Wall Elements Dimension Chains (Maßketten)
         const walls = ['top', 'right', 'bottom', 'left'];
+        
         walls.forEach(w => {
             const segments = getWallSegments(w);
-            if (segments.length === 0) return;
             
-            const offset = 22; // Offset outwards from wall line
+            const witnessOpt = {
+                top: { top: true },
+                bottom: { bottom: true, wallPos: room.depth },
+                left: { left: true },
+                right: { right: true, wallPos: room.width }
+            }[w];
             
-            segments.forEach(seg => {
-                const text = `${seg.label}`;
-                
+            if (segments.length > 0) {
+                // Element chain inside along inner wall
+                segments.forEach(seg => {
+                    const text = `${seg.label}`;
+                    if (w === 'top') {
+                        drawDimensionLine(ctx, seg.start, offset, seg.end, offset, text, { witness: witnessOpt });
+                    } else if (w === 'bottom') {
+                        drawDimensionLine(ctx, seg.start, room.depth - offset, seg.end, room.depth - offset, text, { witness: witnessOpt });
+                    } else if (w === 'left') {
+                        drawDimensionLine(ctx, offset, seg.start, offset, seg.end, text, { witness: witnessOpt });
+                    } else if (w === 'right') {
+                        drawDimensionLine(ctx, room.width - offset, seg.start, room.width - offset, seg.end, text, { witness: witnessOpt });
+                    }
+                });
+            } else {
+                // If wall has no elements: draw overall wall dimension along inner wall (top & left)
                 if (w === 'top') {
-                    drawDimensionLine(ctx, seg.start, -offset, seg.end, -offset, text);
-                } else if (w === 'bottom') {
-                    drawDimensionLine(ctx, seg.start, room.depth + offset, seg.end, room.depth + offset, text);
+                    drawDimensionLine(ctx, 0, offset, room.width, offset, `${formatDim(room.width)} cm`, { witness: witnessOpt });
                 } else if (w === 'left') {
-                    drawDimensionLine(ctx, -offset, seg.start, -offset, seg.end, text);
-                } else if (w === 'right') {
-                    const y1 = seg.start;
-                    const y2 = seg.end;
-                    drawDimensionLine(ctx, room.width + offset, y1, room.width + offset, y2, text);
+                    drawDimensionLine(ctx, offset, 0, offset, room.depth, `${formatDim(room.depth)} cm`, { witness: witnessOpt });
                 }
-            });
+            }
         });
+        
+        // If top wall has elements, ensure overall room width is also available as inner dimension
+        const topSegments = getWallSegments('top');
+        const bottomSegments = getWallSegments('bottom');
+        if (topSegments.length > 0) {
+            if (bottomSegments.length === 0) {
+                drawDimensionLine(ctx, 0, room.depth - offset, room.width, room.depth - offset, `${formatDim(room.width)} cm`, { witness: { bottom: true, wallPos: room.depth } });
+            } else {
+                drawDimensionLine(ctx, 0, 34, room.width, 34, `${formatDim(room.width)} cm`, { witness: { top: true } });
+            }
+        }
+        
+        // If left wall has elements, ensure overall room depth is also available as inner dimension
+        const leftSegments = getWallSegments('left');
+        const rightSegments = getWallSegments('right');
+        if (leftSegments.length > 0) {
+            if (rightSegments.length === 0) {
+                drawDimensionLine(ctx, room.width - offset, 0, room.width - offset, room.depth, `${formatDim(room.depth)} cm`, { witness: { right: true, wallPos: room.width } });
+            } else {
+                drawDimensionLine(ctx, 34, 0, 34, room.depth, `${formatDim(room.depth)} cm`, { witness: { left: true } });
+            }
+        }
     },
     
     drawGrid(ctx) {
@@ -1561,18 +1617,70 @@ const Editor2D = {
                 ctx.fill();
                 ctx.stroke();
                 
-                // Direction line inside circle
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(0, -r);
-                ctx.stroke();
+                if (f.isRug) {
+                    // Stitched inner border (Kettelrand) & fabric texture for round rug
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(0, 0, r, 0, Math.PI * 2);
+                    ctx.clip();
+                    
+                    // Subtle weave grid
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+                    ctx.lineWidth = 0.8;
+                    const step = 8;
+                    for (let x = -r; x <= r; x += step) {
+                        ctx.beginPath(); ctx.moveTo(x, -r); ctx.lineTo(x, r); ctx.stroke();
+                    }
+                    for (let y = -r; y <= r; y += step) {
+                        ctx.beginPath(); ctx.moveTo(-r, y); ctx.lineTo(r, y); ctx.stroke();
+                    }
+                    
+                    // Stitched hem line
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([3, 3]);
+                    ctx.beginPath();
+                    ctx.arc(0, 0, Math.max(4, r - 5), 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.restore();
+                } else {
+                    // Direction line inside circle
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(0, -r);
+                    ctx.stroke();
+                }
             } else {
                 // Rectangle
                 ctx.fillRect(-f.w / 2, -f.l / 2, f.w, f.l);
                 
-                // Cross hatch pattern for chimney/obstacle
-                if (f.isObstacle) {
+                if (f.isRug) {
+                    // Textile fabric cross-weave & stitched hem in 2D
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(-f.w / 2, -f.l / 2, f.w, f.l);
+                    ctx.clip();
+                    
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+                    ctx.lineWidth = 0.8;
+                    const step = 8;
+                    for (let x = -f.w / 2; x <= f.w / 2; x += step) {
+                        ctx.beginPath(); ctx.moveTo(x, -f.l / 2); ctx.lineTo(x, f.l / 2); ctx.stroke();
+                    }
+                    for (let y = -f.l / 2; y <= f.l / 2; y += step) {
+                        ctx.beginPath(); ctx.moveTo(-f.w / 2, y); ctx.lineTo(f.w / 2, y); ctx.stroke();
+                    }
+                    
+                    // Stitched border (Kettelrand)
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([3, 3]);
+                    const inset = Math.min(6, Math.min(f.w, f.l) / 4);
+                    ctx.strokeRect(-f.w / 2 + inset, -f.l / 2 + inset, f.w - inset * 2, f.l - inset * 2);
+                    ctx.restore();
+                } else if (f.isObstacle) {
+                    // Cross hatch pattern for chimney/obstacle
                     ctx.save();
                     ctx.beginPath();
                     ctx.rect(-f.w / 2, -f.l / 2, f.w, f.l);
@@ -2380,60 +2488,188 @@ const TextureGenerator = {
     
     createCarpetFlat(colorHex) {
         const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 128;
+        canvas.width = 256;
+        canvas.height = 256;
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = colorHex;
-        ctx.fillRect(0, 0, 128, 128);
         
-        // Subtle linen/weave noise
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        for (let i = 0; i < 128; i += 2) {
-            ctx.fillRect(i, 0, 1, 128);
-            ctx.fillRect(0, i, 128, 1);
+        // Base fabric color
+        ctx.fillStyle = colorHex || '#94a3b8';
+        ctx.fillRect(0, 0, 256, 256);
+        
+        // Authentic Panama / basketweave textile pattern
+        const blockSize = 16;
+        for (let y = 0; y < 256; y += blockSize) {
+            for (let x = 0; x < 256; x += blockSize) {
+                const isHoriz = ((x / blockSize + y / blockSize) % 2 === 0);
+                
+                if (isHoriz) {
+                    // Horizontal yarn bundle
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
+                    ctx.fillRect(x, y, blockSize, 1.5);
+                    ctx.fillRect(x, y + blockSize - 1.5, blockSize, 1.5);
+                    
+                    // Center thread highlight
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+                    ctx.fillRect(x, y + 3, blockSize, 10);
+                    
+                    // Individual thread fiber striations
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.09)';
+                    ctx.lineWidth = 0.8;
+                    ctx.beginPath();
+                    ctx.moveTo(x, y + 5); ctx.lineTo(x + blockSize, y + 5);
+                    ctx.moveTo(x, y + 10); ctx.lineTo(x + blockSize, y + 10);
+                    ctx.stroke();
+                } else {
+                    // Vertical yarn bundle
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.14)';
+                    ctx.fillRect(x, y, 1.5, blockSize);
+                    ctx.fillRect(x + blockSize - 1.5, y, 1.5, blockSize);
+                    
+                    // Center thread highlight
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+                    ctx.fillRect(x + 3, y, 10, blockSize);
+                    
+                    // Individual thread fiber striations
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.09)';
+                    ctx.lineWidth = 0.8;
+                    ctx.beginPath();
+                    ctx.moveTo(x + 5, y); ctx.lineTo(x + 5, y + blockSize);
+                    ctx.moveTo(x + 10, y); ctx.lineTo(x + 10, y + blockSize);
+                    ctx.stroke();
+                }
+            }
         }
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
-        for (let i = 1; i < 128; i += 2) {
-            ctx.fillRect(i, 0, 1, 128);
-            ctx.fillRect(0, i, 128, 1);
+        
+        // Heathered wool / cotton fiber flecks
+        for (let i = 0; i < 2000; i++) {
+            const rx = Math.random() * 256;
+            const ry = Math.random() * 256;
+            const light = Math.random() > 0.5;
+            ctx.fillStyle = light ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.10)';
+            ctx.fillRect(rx, ry, Math.random() * 2 + 1, Math.random() * 2 + 1);
         }
         
         const tex = new THREE.CanvasTexture(canvas);
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(4, 4);
+        return tex;
+    },
+    
+    createCarpetFlatBump() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(0, 0, 256, 256);
+        
+        const blockSize = 16;
+        for (let y = 0; y < 256; y += blockSize) {
+            for (let x = 0; x < 256; x += blockSize) {
+                const isHoriz = ((x / blockSize + y / blockSize) % 2 === 0);
+                
+                ctx.fillStyle = '#282828';
+                ctx.strokeRect(x, y, blockSize, blockSize);
+                
+                if (isHoriz) {
+                    const grad = ctx.createLinearGradient(x, y, x, y + blockSize);
+                    grad.addColorStop(0, '#484848');
+                    grad.addColorStop(0.5, '#eaeaea');
+                    grad.addColorStop(1, '#484848');
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(x + 1, y + 1, blockSize - 2, blockSize - 2);
+                } else {
+                    const grad = ctx.createLinearGradient(x, y, x + blockSize, y);
+                    grad.addColorStop(0, '#484848');
+                    grad.addColorStop(0.5, '#eaeaea');
+                    grad.addColorStop(1, '#484848');
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(x + 1, y + 1, blockSize - 2, blockSize - 2);
+                }
+            }
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
         return tex;
     },
     
     createCarpetShaggy(colorHex) {
         const canvas = document.createElement('canvas');
-        canvas.width = 256;
-        canvas.height = 256;
+        canvas.width = 512;
+        canvas.height = 512;
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = colorHex;
-        ctx.fillRect(0, 0, 256, 256);
         
-        // Draw 3000 soft tuft fibers
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 3000; i++) {
-            const x = Math.random() * 256;
-            const y = Math.random() * 256;
-            const len = Math.random() * 6 + 3;
+        ctx.fillStyle = colorHex || '#94a3b8';
+        ctx.fillRect(0, 0, 512, 512);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        // 5000 soft curved yarn tufts & fibers
+        for (let i = 0; i < 5000; i++) {
+            const x = Math.random() * 512;
+            const y = Math.random() * 512;
+            const len = Math.random() * 14 + 5;
             const angle = Math.random() * Math.PI * 2;
+            const bend = (Math.random() - 0.5) * 8;
             
-            const dark = Math.random() > 0.5;
-            ctx.strokeStyle = dark ? 'rgba(0, 0, 0, 0.08)' : 'rgba(255, 255, 255, 0.1)';
+            const ex = x + Math.cos(angle) * len;
+            const ey = y + Math.sin(angle) * len;
+            const cx = (x + ex) / 2 - Math.sin(angle) * bend;
+            const cy = (y + ey) / 2 + Math.cos(angle) * bend;
             
+            // Base shadow of fiber
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.lineWidth = Math.random() * 2 + 1.5;
             ctx.beginPath();
             ctx.moveTo(x, y);
-            ctx.lineTo(x + Math.cos(angle) * len, y + Math.sin(angle) * len);
+            ctx.quadraticCurveTo(cx, cy, ex, ey);
+            ctx.stroke();
+            
+            // Highlight of fiber
+            const light = Math.random() > 0.4;
+            ctx.strokeStyle = light ? 'rgba(255, 255, 255, 0.26)' : 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = Math.random() * 1.2 + 0.8;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.quadraticCurveTo(cx, cy, ex, ey);
             ctx.stroke();
         }
         
         const tex = new THREE.CanvasTexture(canvas);
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(2, 2);
+        return tex;
+    },
+    
+    createCarpetShaggyBump() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#222222';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        for (let i = 0; i < 4000; i++) {
+            const x = Math.random() * 512;
+            const y = Math.random() * 512;
+            const r = Math.random() * 6 + 2;
+            const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+            grad.addColorStop(0, '#ffffff');
+            grad.addColorStop(0.5, '#777777');
+            grad.addColorStop(1, '#222222');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
         return tex;
     }
 };
@@ -2452,9 +2688,13 @@ const TextureCache = {
         } else if (type === 'fabric') {
             tex = TextureGenerator.createFabric(colorHex || '#A89F91');
         } else if (type === 'carpet_flat') {
-            tex = TextureGenerator.createCarpetFlat(colorHex || '#d1d5db');
+            tex = TextureGenerator.createCarpetFlat(colorHex || '#94a3b8');
+        } else if (type === 'carpet_flat_bump') {
+            tex = TextureGenerator.createCarpetFlatBump();
         } else if (type === 'carpet_shaggy') {
-            tex = TextureGenerator.createCarpetShaggy(colorHex || '#e5e7eb');
+            tex = TextureGenerator.createCarpetShaggy(colorHex || '#cbd5e1');
+        } else if (type === 'carpet_shaggy_bump') {
+            tex = TextureGenerator.createCarpetShaggyBump();
         }
         
         if (tex) this.textures[key] = tex;
@@ -3628,14 +3868,27 @@ const Viewer3D = {
             return defaultMat;
         };
         
+        const isRug = f.isRug || (f.name && f.name.toLowerCase().includes('teppich'));
+        if (isRug) f.isRug = true;
+        
         let rugMat;
         if (f.isRug) {
-            const rugColor = f.color3d || f.color || 'hsl(215, 60%, 45%)';
+            const rugColor = f.color3d || f.color || 'hsl(215, 25%, 60%)';
             const rugTexType = f.rugTexture === 'shaggy' ? 'carpet_shaggy' : 'carpet_flat';
             const rugTex = TextureCache.get(rugTexType, rugColor);
+            const rugBump = TextureCache.get(rugTexType + '_bump');
+            
+            // Texture repeat scaled to physical carpet dimensions (1 repeat per ~35cm)
+            const repX = Math.max(1, Math.round(f.w / 35));
+            const repY = Math.max(1, Math.round((f.shape === 'circle' ? f.w : f.l) / 35));
+            rugTex.repeat.set(repX, repY);
+            if (rugBump) rugBump.repeat.set(repX, repY);
+            
             rugMat = new THREE.MeshStandardMaterial({
                 map: rugTex,
-                roughness: f.rugTexture === 'shaggy' ? 1.0 : 0.8,
+                bumpMap: rugBump,
+                bumpScale: f.rugTexture === 'shaggy' ? 0.35 : 0.18,
+                roughness: 0.98,
                 metalness: 0.0
             });
         }
@@ -4152,8 +4405,8 @@ const Presets = {
     'custom-circle': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
     chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
     tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 },
-    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' },
-    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(142, 60%, 40%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' }
+    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' },
+    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(30, 25%, 70%)', collisionEnabled: true, isRug: true, rugTexture: 'flat' }
 };
 
 function loadExampleRoom() {
@@ -4632,21 +4885,61 @@ function attachPropertiesListeners() {
     listenChange('prop-w', (e) => {
         const val = Math.max(10, parseFloat(e.target.value) || 0);
         if (State.selectedItemType === 'element') {
-            const temp = { ...item, w: val };
-            if (!isValidWallForElement(temp, item.wall, item.position)) {
+            const maxPos = (item.wall === 'top' || item.wall === 'bottom') ? State.room.width : State.room.depth;
+            const oldW = item.w || 0;
+            const distLeft = item.position - oldW / 2;
+            const distRight = maxPos - (item.position + oldW / 2);
+            
+            // Wenn man die Breite ändert, bleibt der kleinere Abstand zur nächsten Wand gleich
+            let newPos = item.position;
+            if (distLeft <= distRight) {
+                newPos = distLeft + val / 2;
+            } else {
+                newPos = maxPos - distRight - val / 2;
+            }
+            // Innerhalb der Wandgrenzen halten
+            newPos = Math.max(val / 2, Math.min(maxPos - val / 2, newPos));
+            
+            const temp = { ...item, w: val, position: newPos };
+            if (!isValidWallForElement(temp, item.wall, newPos)) {
                 alert('Diese Breite führt zu einer Kollision mit der Dachschräge oder einem anderen Element!');
                 e.target.value = item.w;
                 return;
+            }
+            item.position = newPos;
+        } else if (State.selectedItemType === 'furniture' && item.isObstacle) {
+            const closest = getClosestWall(item);
+            const isRotated = (Math.round((item.rotation || 0) / 90) % 2 === 1);
+            const oldHalfW = (isRotated ? item.l : item.w) / 2;
+            const newHalfW = (isRotated ? item.l : val) / 2;
+            if (closest.wall === 'left') {
+                item.x = item.x - oldHalfW + newHalfW;
+            } else if (closest.wall === 'right') {
+                item.x = item.x + oldHalfW - newHalfW;
             }
         }
         item.w = val;
         if (item.shape === 'circle') item.l = item.w; // sync circle diameter
         updateSelectedMesh();
+        syncPropertiesPanel();
     });
     
     listenChange('prop-l', (e) => {
-        item.l = Math.max(10, parseFloat(e.target.value) || 0);
+        const val = Math.max(10, parseFloat(e.target.value) || 0);
+        if (State.selectedItemType === 'furniture' && item.isObstacle) {
+            const closest = getClosestWall(item);
+            const isRotated = (Math.round((item.rotation || 0) / 90) % 2 === 1);
+            const oldHalfL = (isRotated ? item.w : item.l) / 2;
+            const newHalfL = (isRotated ? val : val) / 2;
+            if (closest.wall === 'top') {
+                item.y = item.y - oldHalfL + newHalfL;
+            } else if (closest.wall === 'bottom') {
+                item.y = item.y + oldHalfL - newHalfL;
+            }
+        }
+        item.l = val;
         updateSelectedMesh();
+        syncPropertiesPanel();
     });
     
     listenChange('prop-h', (e) => {
