@@ -31,12 +31,22 @@ const State = {
     installations: [],  // sockets, switches, etc.
     selectedItem: null, // ref to selected furniture, element, or installation
     selectedItemType: null, // 'furniture', 'element', 'installation'
+    get selectedFurniture() {
+        return this.selectedItemType === 'furniture' ? this.selectedItem : null;
+    },
+    set selectedFurniture(f) {
+        selectItem(f, f ? 'furniture' : null);
+    },
     settings: {
         gridEnabled: true,
         gridSize: 10, // cm
         collisionEnabled: true,
+        smartSnappingEnabled: true,
         viewMode: '2d', // '2d', '3d', 'split'
-        viewStyle3D: 'plan' // 'plan' (transparente Planungsansicht) oder 'texture' (Wandfarben & Texturen)
+        viewStyle3D: 'plan', // 'plan' (transparente Planungsansicht) oder 'texture' (Wandfarben & Texturen)
+        ceilingLampsEnabled: true,
+        ceilingLampIntensity: 1.0,
+        ceilingLampColor: '#ffeedd'
     },
     editor2D: {
         zoom: 1.0,
@@ -48,7 +58,8 @@ const State = {
         dragOffset: { x: 0, y: 0 },
         initialItemState: null,
         resizeHandleIndex: -1,
-        hasManuallyPannedOrZoomed: false
+        hasManuallyPannedOrZoomed: false,
+        activeGuides: []
     }
 };
 
@@ -288,12 +299,30 @@ function getCeilingHeightAt(x, y) {
     return Math.max(0, minHeight);
 }
 
+// Compute positions of ceiling lamps based on room dimensions (single center or multi-lamp grid if > 600cm)
+function getCeilingLampPositions(room = State.room) {
+    const r = room || State.room;
+    if (!r) return [];
+    const lamps = [];
+    const countX = (r && r.width > 600) ? 2 : 1;
+    const countY = (r && r.depth > 600) ? 2 : 1;
+
+    for (let ix = 0; ix < countX; ix++) {
+        const x = r.width * (ix + 0.5) / countX;
+        for (let iy = 0; iy < countY; iy++) {
+            const y = r.depth * (iy + 0.5) / countY;
+            lamps.push({ x, y });
+        }
+    }
+    return lamps;
+}
+
 // Get corners of a rectangle furniture rotated around center
 function getFurnitureCorners(f) {
-    if (f.shape !== 'rect') return [];
-    const rad = (f.rotation * Math.PI) / 180;
-    const halfW = f.w / 2;
-    const halfL = f.l / 2;
+    if (!f || f.shape !== 'rect') return [];
+    const rad = ((f.rotation || 0) * Math.PI) / 180;
+    const halfW = (f.w || 0) / 2;
+    const halfL = (f.l || 0) / 2;
 
     const localCorners = [
         new Vector2D(-halfW, -halfL),
@@ -312,6 +341,8 @@ function getFurnitureCorners(f) {
 const CollisionEngine = {
     // Oriented Bounding Box collision detection using Separating Axis Theorem (SAT)
     checkOBBvsOBB(cornersA, cornersB) {
+        if (!cornersA || !cornersB || cornersA.length < 4 || cornersB.length < 4) return false;
+
         const axes = [
             // Normals of A
             new Vector2D(-(cornersA[1].y - cornersA[0].y), cornersA[1].x - cornersA[0].x),
@@ -344,8 +375,9 @@ const CollisionEngine = {
                 maxB = Math.max(maxB, proj);
             }
 
-            // Test overlap
-            if (maxA < minB || maxB < minA) {
+            // Test overlap with epsilon tolerance for flush contacts
+            const EPS = 1e-5;
+            if (maxA <= minB + EPS || maxB <= minA + EPS) {
                 return false; // Gap found, no collision
             }
         }
@@ -357,12 +389,15 @@ const CollisionEngine = {
         const dy = c1.y - c2.y;
         const distSq = dx * dx + dy * dy;
         const radSum = r1 + r2;
-        return distSq < radSum * radSum;
+        const EPS = 1e-4;
+        const radSumEff = Math.max(0, radSum - EPS);
+        return distSq < radSumEff * radSumEff;
     },
 
     checkCircleVsOBB(circleCenter, r, rectCenter, w, l, rotationDeg) {
         // Transform circle to rect's local space
-        const rad = (-rotationDeg * Math.PI) / 180;
+        const rot = rotationDeg || 0;
+        const rad = (-rot * Math.PI) / 180;
         const dx = circleCenter.x - rectCenter.x;
         const dy = circleCenter.y - rectCenter.y;
         
@@ -371,37 +406,48 @@ const CollisionEngine = {
         const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
 
         // Find closest point on unrotated rect to local circle center
-        const closestX = Math.max(-w/2, Math.min(w/2, localX));
-        const closestY = Math.max(-l/2, Math.min(l/2, localY));
+        const halfW = (w || 0) / 2;
+        const halfL = (l || 0) / 2;
+        const closestX = Math.max(-halfW, Math.min(halfW, localX));
+        const closestY = Math.max(-halfL, Math.min(halfL, localY));
 
         // Distance in local space
         const diffX = localX - closestX;
         const diffY = localY - closestY;
         const distSq = diffX * diffX + diffY * diffY;
 
-        return distSq < r * r;
+        const EPS = 1e-4;
+        const rEff = Math.max(0, r - EPS);
+        return distSq < rEff * rEff;
     },
 
     checkFurnitureCollision(f1, f2) {
+        if (!f1 || !f2) return false;
+        if (f1.collisionEnabled === false || f2.collisionEnabled === false) return false;
+
         // Disable collision for TVs (they sit on other furniture)
         const name1 = (f1.name || '').toLowerCase();
         const name2 = (f2.name || '').toLowerCase();
-        const isTV1 = name1.includes('tv') || name1.includes('fernseher') || (f1.tvSize !== null && f1.tvSize !== undefined);
-        const isTV2 = name2.includes('tv') || name2.includes('fernseher') || (f2.tvSize !== null && f2.tvSize !== undefined);
+        const isTV1 = (f1.tvSize !== null && f1.tvSize !== undefined) || (!name1.includes('lowboard') && !name1.includes('sideboard') && !name1.includes('board') && (name1.includes('tv') || name1.includes('fernseher')));
+        const isTV2 = (f2.tvSize !== null && f2.tvSize !== undefined) || (!name2.includes('lowboard') && !name2.includes('sideboard') && !name2.includes('board') && (name2.includes('tv') || name2.includes('fernseher')));
         if (isTV1 || isTV2) {
             return false;
         }
 
-        // Disable collision for carpets (they sit under furniture)
-        if (f1.isRug || f2.isRug) {
+        // Disable collision for carpets / rugs (they sit under furniture)
+        const isRug1 = Boolean(f1.isRug || name1.includes('teppich') || name1.includes('rug'));
+        const isRug2 = Boolean(f2.isRug || name2.includes('teppich') || name2.includes('rug'));
+        if (isRug1 || isRug2) {
             return false;
         }
 
         // Vertical span overlap check
+        const h1 = (typeof f1.h === 'number') ? f1.h : ((typeof f1.height === 'number') ? f1.height : 0);
+        const h2 = (typeof f2.h === 'number') ? f2.h : ((typeof f2.height === 'number') ? f2.height : 0);
         const elev1 = f1.elevation || 0;
         const elev2 = f2.elevation || 0;
-        const top1 = elev1 + f1.h;
-        const top2 = elev2 + f2.h;
+        const top1 = elev1 + h1;
+        const top2 = elev2 + h2;
         
         // No vertical overlap
         if (top1 <= elev2 + 0.1 || top2 <= elev1 + 0.1) {
@@ -411,32 +457,33 @@ const CollisionEngine = {
         if (f1.shape === 'rect' && f2.shape === 'rect') {
             return this.checkOBBvsOBB(getFurnitureCorners(f1), getFurnitureCorners(f2));
         } else if (f1.shape === 'circle' && f2.shape === 'circle') {
-            return this.checkCircleVsCircle({ x: f1.x, y: f1.y }, f1.w / 2, { x: f2.x, y: f2.y }, f2.w / 2);
+            return this.checkCircleVsCircle({ x: f1.x, y: f1.y }, (f1.w || 0) / 2, { x: f2.x, y: f2.y }, (f2.w || 0) / 2);
         } else {
             // One rect, one circle
             const rect = f1.shape === 'rect' ? f1 : f2;
             const circle = f1.shape === 'circle' ? f1 : f2;
             return this.checkCircleVsOBB(
                 { x: circle.x, y: circle.y },
-                circle.w / 2,
+                (circle.w || 0) / 2,
                 { x: rect.x, y: rect.y },
-                rect.w,
-                rect.l,
-                rect.rotation
+                rect.w || 0,
+                rect.l || 0,
+                rect.rotation || 0
             );
         }
     },
 
-    checkWallCollision(f) {
-        const room = State.room;
+    checkWallCollision(f, room = State.room) {
+        if (!f || !room) return false;
+        const EPS = 1e-4;
         if (f.shape === 'circle') {
-            const r = f.w / 2;
-            return (f.x - r < 0 || f.x + r > room.width || f.y - r < 0 || f.y + r > room.depth);
+            const r = (f.w || 0) / 2;
+            return (f.x - r < -EPS || f.x + r > room.width + EPS || f.y - r < -EPS || f.y + r > room.depth + EPS);
         } else {
             // Rectangle: check all 4 corners
             const corners = getFurnitureCorners(f);
             for (let c of corners) {
-                if (c.x < 0 || c.x > room.width || c.y < 0 || c.y > room.depth) {
+                if (c.x < -EPS || c.x > room.width + EPS || c.y < -EPS || c.y > room.depth + EPS) {
                     return true;
                 }
             }
@@ -444,20 +491,95 @@ const CollisionEngine = {
         return false;
     },
 
+    clampFurnitureToRoom(f, room = State.room) {
+        if (!f || !room) return false;
+        const initialX = f.x;
+        const initialY = f.y;
+
+        if (f.shape === 'circle') {
+            const r = (f.w || 0) / 2;
+            const diam = r * 2;
+            if (diam >= room.width) {
+                f.x = room.width / 2;
+            } else {
+                f.x = Math.max(r, Math.min(room.width - r, f.x));
+            }
+
+            if (diam >= room.depth) {
+                f.y = room.depth / 2;
+            } else {
+                f.y = Math.max(r, Math.min(room.depth - r, f.y));
+            }
+        } else {
+            let corners = getFurnitureCorners(f);
+            if (!corners || corners.length === 0) {
+                const rad = ((f.rotation || 0) * Math.PI) / 180;
+                const halfW = (f.w || 20) / 2;
+                const halfL = (f.l || 20) / 2;
+                const localCorners = [
+                    new Vector2D(-halfW, -halfL),
+                    new Vector2D(halfW, -halfL),
+                    new Vector2D(halfW, halfL),
+                    new Vector2D(-halfW, halfL)
+                ];
+                corners = localCorners.map(c => {
+                    const r = c.rotate(rad);
+                    return new Vector2D(f.x + r.x, f.y + r.y);
+                });
+            }
+
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            for (let i = 0; i < corners.length; i++) {
+                const c = corners[i];
+                if (c.x < minX) minX = c.x;
+                if (c.x > maxX) maxX = c.x;
+                if (c.y < minY) minY = c.y;
+                if (c.y > maxY) maxY = c.y;
+            }
+
+            const spanX = maxX - minX;
+            if (spanX >= room.width) {
+                f.x = room.width / 2;
+            } else if (minX < 0) {
+                f.x -= minX;
+            } else if (maxX > room.width) {
+                f.x -= (maxX - room.width);
+            }
+
+            const spanY = maxY - minY;
+            if (spanY >= room.depth) {
+                f.y = room.depth / 2;
+            } else if (minY < 0) {
+                f.y -= minY;
+            } else if (maxY > room.depth) {
+                f.y -= (maxY - room.depth);
+            }
+        }
+        return f.x !== initialX || f.y !== initialY;
+    },
+
     checkRoofPitchCollision(f) {
-        if (f.isObstacle) return false;
+        if (!f || f.isObstacle || f.isRug) return false;
         
-        const totalHeight = (f.elevation || 0) + f.h;
+        // Defensively resolve height: support f.h and f.height
+        const fHeight = (typeof f.h === 'number') ? f.h : ((typeof f.height === 'number') ? f.height : 0);
+        const fElev = (typeof f.elevation === 'number') ? f.elevation : 0;
+        const totalHeight = fElev + fHeight;
         
         if (f.shape === 'circle') {
-            const r = f.w / 2;
-            const pointsToCheck = [
-                { x: f.x, y: f.y },
-                { x: f.x - r, y: f.y },
-                { x: f.x + r, y: f.y },
-                { x: f.x, y: f.y - r },
-                { x: f.x, y: f.y + r }
-            ];
+            const r = (f.w || 0) / 2;
+            const pointsToCheck = [{ x: f.x, y: f.y }];
+            
+            // Sample 32 perimeter points at 11.25-degree intervals to eliminate blind spots near partial pitch transitions
+            for (let i = 0; i < 32; i++) {
+                const angle = (i * Math.PI) / 16;
+                pointsToCheck.push({
+                    x: f.x + r * Math.cos(angle),
+                    y: f.y + r * Math.sin(angle)
+                });
+            }
+            
             for (let p of pointsToCheck) {
                 const ceilH = getCeilingHeightAt(p.x, p.y);
                 if (totalHeight > ceilH) return true;
@@ -485,13 +607,13 @@ const CollisionEngine = {
         // Automatically calculate elevation for all TVs based on what is underneath them
         State.furniture.forEach(f => {
             const nameLower = (f.name || '').toLowerCase();
-            const isTV = nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined);
+            const isTV = (f.tvSize !== null && f.tvSize !== undefined) || (!nameLower.includes('lowboard') && !nameLower.includes('sideboard') && !nameLower.includes('board') && (nameLower.includes('tv') || nameLower.includes('fernseher')));
             if (isTV) {
                 let highestSurface = 0;
                 State.furniture.forEach(o => {
                     if (o === f) return; // skip self
                     const oName = (o.name || '').toLowerCase();
-                    const oIsTV = oName.includes('tv') || oName.includes('fernseher') || (o.tvSize !== null && o.tvSize !== undefined);
+                    const oIsTV = (o.tvSize !== null && o.tvSize !== undefined) || (!oName.includes('lowboard') && !oName.includes('sideboard') && !oName.includes('board') && (oName.includes('tv') || oName.includes('fernseher')));
                     if (oIsTV) return; // skip other TVs
                     
                     // Translate and rotate f's center into o's local coordinates
@@ -516,7 +638,8 @@ const CollisionEngine = {
                     
                     if (inside) {
                         const oElev = o.elevation || 0;
-                        const surface = oElev + o.h;
+                        const oHeight = (typeof o.h === 'number') ? o.h : ((typeof o.height === 'number') ? o.height : 0);
+                        const surface = oElev + oHeight;
                         if (surface > highestSurface) {
                             highestSurface = surface;
                         }
@@ -532,18 +655,25 @@ const CollisionEngine = {
 
         if (!State.settings.collisionEnabled) {
             State.furniture.forEach(f => f.isColliding = false);
+            const badge = typeof document !== 'undefined' ? document.getElementById('collision-alert') : null;
+            if (badge) badge.classList.add('hidden');
             return false;
         }
 
+        // Capture previous collision state for selective 3D mesh updates
+        const prevColliding = new Map(State.furniture.map(f => [f, f.isColliding]));
+
         let anyCollision = false;
 
-        // Reset
+        // Reset all collision flags
         State.furniture.forEach(f => f.isColliding = false);
 
-        // Check Furniture vs Furniture (but only against walls and roof pitches)
+        // Check Wall, Roof Pitch, and Pairwise Furniture Collisions
         for (let i = 0; i < State.furniture.length; i++) {
             const f1 = State.furniture[i];
-            if (!f1.collisionEnabled) continue;
+            if (f1.collisionEnabled === false) continue;
+
+            const isRug1 = Boolean(f1.isRug || (f1.name && (f1.name.toLowerCase().includes('teppich') || f1.name.toLowerCase().includes('rug'))));
 
             // Check vs wall boundaries
             if (this.checkWallCollision(f1)) {
@@ -552,23 +682,215 @@ const CollisionEngine = {
             }
             
             // Check vs roof pitches (unless it's a rug)
-            if (!f1.isRug && this.checkRoofPitchCollision(f1)) {
+            if (!isRug1 && this.checkRoofPitchCollision(f1)) {
                 f1.isColliding = true;
                 anyCollision = true;
             }
 
-            // Furniture vs Furniture collision is completely disabled
-            // (Kollision nur mit Wänden / Dachschrägen)
+            // Pairwise Furniture vs Furniture collision (SAT OBB, Circle, Elevation)
+            for (let j = i + 1; j < State.furniture.length; j++) {
+                const f2 = State.furniture[j];
+                if (f2.collisionEnabled === false) continue;
+
+                if (this.checkFurnitureCollision(f1, f2)) {
+                    f1.isColliding = true;
+                    f2.isColliding = true;
+                    anyCollision = true;
+                }
+            }
         }
 
         // Show/hide collision badge
-        const badge = document.getElementById('collision-alert');
+        const badge = typeof document !== 'undefined' ? document.getElementById('collision-alert') : null;
         if (badge) {
             if (anyCollision) badge.classList.remove('hidden');
             else badge.classList.add('hidden');
         }
 
+        // Synchronize 3D meshes whose collision state changed
+        if (typeof Viewer3D !== 'undefined' && Viewer3D && Viewer3D.renderer) {
+            State.furniture.forEach(f => {
+                if (prevColliding.get(f) !== f.isColliding) {
+                    Viewer3D.updateFurniture3D(f);
+                }
+            });
+        }
+
         return anyCollision;
+    }
+};
+
+// --- SMART SNAPPING & DYNAMIC HUD ALIGNMENT GUIDES ---
+const SmartSnapping = {
+    DEFAULT_THRESHOLD: 10, // cm world units
+
+    getExtents(f) {
+        if (!f) return { halfSpanX: 0, halfSpanY: 0 };
+        if (f.shape === 'circle') {
+            const r = (f.w || 0) / 2;
+            return { halfSpanX: r, halfSpanY: r };
+        }
+        const halfW = (f.w || 0) / 2;
+        const halfL = (f.l || 0) / 2;
+        const rot = ((f.rotation || 0) * Math.PI) / 180;
+        const cos = Math.abs(Math.cos(rot));
+        const sin = Math.abs(Math.sin(rot));
+        return {
+            halfSpanX: halfW * cos + halfL * sin,
+            halfSpanY: halfW * sin + halfL * cos
+        };
+    },
+
+    computeSnap(draggingItem, otherFurniture = [], room = State.room, threshold = 10, options = {}) {
+        if (!draggingItem || !room) {
+            return {
+                snappedX: draggingItem ? draggingItem.x : 0,
+                snappedY: draggingItem ? draggingItem.y : 0,
+                guides: [],
+                snappedAxes: { x: false, y: false }
+            };
+        }
+
+        const { halfSpanX, halfSpanY } = this.getExtents(draggingItem);
+        const dragX = draggingItem.x;
+        const dragY = draggingItem.y;
+
+        const dragRefsX = [
+            { type: 'left', offset: -halfSpanX, val: dragX - halfSpanX },
+            { type: 'center', offset: 0, val: dragX },
+            { type: 'right', offset: halfSpanX, val: dragX + halfSpanX }
+        ];
+
+        const dragRefsY = [
+            { type: 'top', offset: -halfSpanY, val: dragY - halfSpanY },
+            { type: 'center', offset: 0, val: dragY },
+            { type: 'bottom', offset: halfSpanY, val: dragY + halfSpanY }
+        ];
+
+        // 1. Collect X Candidates
+        const targetsX = [];
+        // Room Centerline (Priority 2)
+        targetsX.push({ val: room.width / 2, type: 'room-center', label: 'Raummitte', priority: 2 });
+        // Wall Boundaries (Priority 1)
+        targetsX.push({ val: 0, type: 'wall', label: 'Wand', priority: 1, side: 'left' });
+        targetsX.push({ val: room.width, type: 'wall', label: 'Wand', priority: 1, side: 'right' });
+        // Sibling Furniture (Priority 3)
+        for (const s of otherFurniture) {
+            if (s.id === draggingItem.id || s === draggingItem) continue;
+            const ext = this.getExtents(s);
+            const name = s.name || 'Möbel';
+            targetsX.push({ val: s.x - ext.halfSpanX, type: 'furniture-edge', label: name, priority: 3, item: s });
+            targetsX.push({ val: s.x, type: 'furniture-center', label: name, priority: 3, item: s });
+            targetsX.push({ val: s.x + ext.halfSpanX, type: 'furniture-edge', label: name, priority: 3, item: s });
+        }
+
+        // 2. Collect Y Candidates
+        const targetsY = [];
+        // Room Centerline (Priority 2)
+        targetsY.push({ val: room.depth / 2, type: 'room-center', label: 'Raummitte', priority: 2 });
+        // Wall Boundaries (Priority 1)
+        targetsY.push({ val: 0, type: 'wall', label: 'Wand', priority: 1, side: 'top' });
+        targetsY.push({ val: room.depth, type: 'wall', label: 'Wand', priority: 1, side: 'bottom' });
+        // Sibling Furniture (Priority 3)
+        for (const s of otherFurniture) {
+            if (s.id === draggingItem.id || s === draggingItem) continue;
+            const ext = this.getExtents(s);
+            const name = s.name || 'Möbel';
+            targetsY.push({ val: s.y - ext.halfSpanY, type: 'furniture-edge', label: name, priority: 3, item: s });
+            targetsY.push({ val: s.y, type: 'furniture-center', label: name, priority: 3, item: s });
+            targetsY.push({ val: s.y + ext.halfSpanY, type: 'furniture-edge', label: name, priority: 3, item: s });
+        }
+
+        // 3. Evaluate X matches
+        let bestSnapX = null;
+        for (const t of targetsX) {
+            for (const dRef of dragRefsX) {
+                // Prevent snapping past walls
+                if (t.type === 'wall' && t.side === 'left' && dRef.type !== 'left') continue;
+                if (t.type === 'wall' && t.side === 'right' && dRef.type !== 'right') continue;
+
+                const delta = t.val - dRef.val;
+                const dist = Math.abs(delta);
+                if (dist <= threshold) {
+                    if (!bestSnapX || dist < bestSnapX.dist || (dist === bestSnapX.dist && t.priority > bestSnapX.target.priority)) {
+                        bestSnapX = {
+                            dist,
+                            delta,
+                            snappedX: dragX + delta,
+                            guideVal: t.val,
+                            target: t,
+                            dragRef: dRef
+                        };
+                    }
+                }
+            }
+        }
+
+        // 4. Evaluate Y matches
+        let bestSnapY = null;
+        for (const t of targetsY) {
+            for (const dRef of dragRefsY) {
+                if (t.type === 'wall' && t.side === 'top' && dRef.type !== 'top') continue;
+                if (t.type === 'wall' && t.side === 'bottom' && dRef.type !== 'bottom') continue;
+
+                const delta = t.val - dRef.val;
+                const dist = Math.abs(delta);
+                if (dist <= threshold) {
+                    if (!bestSnapY || dist < bestSnapY.dist || (dist === bestSnapY.dist && t.priority > bestSnapY.target.priority)) {
+                        bestSnapY = {
+                            dist,
+                            delta,
+                            snappedY: dragY + delta,
+                            guideVal: t.val,
+                            target: t,
+                            dragRef: dRef
+                        };
+                    }
+                }
+            }
+        }
+
+        const guides = [];
+        const snappedAxes = { x: false, y: false };
+        let finalX = dragX;
+        let finalY = dragY;
+
+        if (bestSnapX) {
+            finalX = Math.round(bestSnapX.snappedX * 10000) / 10000;
+            snappedAxes.x = true;
+            guides.push({
+                x1: bestSnapX.guideVal,
+                y1: 0,
+                x2: bestSnapX.guideVal,
+                y2: room.depth,
+                axis: 'x',
+                type: bestSnapX.target.type,
+                label: bestSnapX.target.label,
+                snapPos: bestSnapX.guideVal
+            });
+        }
+
+        if (bestSnapY) {
+            finalY = Math.round(bestSnapY.snappedY * 10000) / 10000;
+            snappedAxes.y = true;
+            guides.push({
+                x1: 0,
+                y1: bestSnapY.guideVal,
+                x2: room.width,
+                y2: bestSnapY.guideVal,
+                axis: 'y',
+                type: bestSnapY.target.type,
+                label: bestSnapY.target.label,
+                snapPos: bestSnapY.guideVal
+            });
+        }
+
+        return {
+            snappedX: finalX,
+            snappedY: finalY,
+            guides,
+            snappedAxes
+        };
     }
 };
 
@@ -889,10 +1211,11 @@ function drawDimensionLine(ctx, x1, y1, x2, y2, text, options = {}) {
     ctx.rotate(angle);
     
     const metrics = ctx.measureText(text);
-    ctx.fillStyle = '#0b0f19'; // App background to cleanly mask dimension line under text
+    const isLight = typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-theme') === 'light';
+    ctx.fillStyle = isLight ? '#f8fafc' : '#09090b'; // Dynamic canvas background to cleanly mask dimension line under text
     ctx.fillRect(-metrics.width / 2 - 3, -6, metrics.width + 6, 12);
     
-    ctx.fillStyle = '#cbd5e1'; // Slate-300
+    ctx.fillStyle = isLight ? '#1e293b' : '#cbd5e1'; // Dark Slate in light mode, Slate-300 in dark mode
     ctx.fillText(text, 0, 0);
     
     ctx.restore();
@@ -1009,6 +1332,11 @@ const Editor2D = {
                 e.preventDefault();
                 History.redo();
             }
+
+            // Escape: Deselect active item and close properties inspector
+            if (e.key === 'Escape' && State.selectedItem) {
+                selectItem(null, null);
+            }
         });
     },
     
@@ -1031,12 +1359,13 @@ const Editor2D = {
     
     resetView() {
         const wrapper = this.canvas.parentElement;
+        if (!wrapper || wrapper.clientWidth <= 100 || wrapper.clientHeight <= 100) return;
         const padding = 50; // pixels
         const extraDim = 50; // cm for outer dimension lines outside walls
         const scaleX = (wrapper.clientWidth - padding * 2) / (State.room.width + extraDim * 2);
         const scaleY = (wrapper.clientHeight - padding * 2) / (State.room.depth + extraDim * 2);
         
-        State.editor2D.zoom = Math.min(scaleX, scaleY, 1.5);
+        State.editor2D.zoom = Math.max(0.1, Math.min(scaleX, scaleY, 1.5));
         State.editor2D.panX = (wrapper.clientWidth - State.room.width * State.editor2D.zoom) / 2;
         State.editor2D.panY = (wrapper.clientHeight - State.room.depth * State.editor2D.zoom) / 2;
         this.draw();
@@ -1069,7 +1398,8 @@ const Editor2D = {
         });
         
         // Clear
-        ctx.fillStyle = '#0b0f19'; // App background
+        const isLight = typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-theme') === 'light';
+        ctx.fillStyle = isLight ? '#f8fafc' : '#09090b'; // Dynamic canvas background
         ctx.fillRect(0, 0, w, h);
         
         ctx.save();
@@ -1096,12 +1426,222 @@ const Editor2D = {
         // 6. Draw Furniture
         this.drawFurniture(ctx);
         
+        // 6.5. Draw Ceiling Lamps (Electrical standard symbol ⊗ per IEC 60617)
+        this.drawCeilingLamps(ctx);
+
         // 7. Draw Dimensions & Chains
         this.drawDimensions(ctx);
         
+        // 7.5. Draw Smart Snapping Dynamic HUD Guides
+        this.drawSnapGuides(ctx);
+
+        // 8. Draw Walkthrough Camera Radar Frustum Cone
+        if (typeof Viewer3D !== 'undefined' && Viewer3D && (Viewer3D.isWalkthrough || Viewer3D.showRadarAlways)) {
+            this.drawCameraRadar(ctx);
+        }
+
         ctx.restore();
     },
     
+    drawSnapGuides(ctx) {
+        const guides = State.editor2D.activeGuides;
+        if (!guides || guides.length === 0) return;
+
+        ctx.save();
+        const zoom = State.editor2D.zoom || 1;
+        const lineWidth = 1.5 / zoom;
+        const dash = [6 / zoom, 4 / zoom];
+
+        for (const g of guides) {
+            // 1. Dashed Cyan Alignment Line
+            ctx.strokeStyle = '#06b6d4';
+            ctx.lineWidth = lineWidth;
+            ctx.setLineDash(dash);
+            ctx.beginPath();
+            ctx.moveTo(g.x1, g.y1);
+            ctx.lineTo(g.x2, g.y2);
+            ctx.stroke();
+
+            // 2. HUD Alignment Badge Pill
+            if (g.label) {
+                ctx.setLineDash([]);
+                const text = g.label;
+                const fontSize = Math.max(9, Math.round(11 / zoom));
+                ctx.font = `600 ${fontSize}px Inter, sans-serif`;
+                const textMetrics = ctx.measureText(text);
+                const padX = 6 / zoom;
+                const padY = 3 / zoom;
+                const badgeW = textMetrics.width + padX * 2;
+                const badgeH = fontSize + padY * 2;
+
+                let bx, by;
+                if (g.axis === 'x') {
+                    bx = g.snapPos - badgeW / 2;
+                    by = 12 / zoom;
+                } else {
+                    bx = 12 / zoom;
+                    by = g.snapPos - badgeH / 2;
+                }
+
+                // Dark Pill Background
+                ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
+                ctx.strokeStyle = '#06b6d4';
+                ctx.lineWidth = 1 / zoom;
+                
+                const rad = 3 / zoom;
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(bx, by, badgeW, badgeH, rad);
+                } else {
+                    ctx.rect(bx, by, badgeW, badgeH);
+                }
+                ctx.fill();
+                ctx.stroke();
+
+                // Text
+                ctx.fillStyle = '#38bdf8'; // Light Cyan / Sky
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, bx + badgeW / 2, by + badgeH / 2);
+            }
+        }
+        ctx.restore();
+    },
+
+    drawCameraRadar(ctx) {
+        if (typeof Viewer3D === 'undefined' || !Viewer3D) return;
+        if (!Viewer3D.camera && typeof THREE !== 'undefined' && THREE.PerspectiveCamera) {
+            Viewer3D.camera = new THREE.PerspectiveCamera(45, 1, 1, 3000);
+        }
+        if (!Viewer3D.camera || !Viewer3D.camera.position) return;
+
+        const room = State.room;
+        // Convert 3D camera position to 2D room coordinates
+        const px = Viewer3D.camera.position.x + room.width / 2;
+        const py = Viewer3D.camera.position.z + room.depth / 2;
+
+        // Compute 2D heading angle from camera world direction or walkthroughYaw
+        let yaw2D = 0;
+        if (Viewer3D.isWalkthrough && typeof Viewer3D.walkthroughYaw === 'number') {
+            const fwdX = -Math.sin(Viewer3D.walkthroughYaw);
+            const fwdZ = -Math.cos(Viewer3D.walkthroughYaw);
+            yaw2D = Math.atan2(fwdZ, fwdX);
+        } else if (Viewer3D.camera.getWorldDirection && typeof THREE !== 'undefined' && THREE.Vector3) {
+            const fwd = new THREE.Vector3();
+            Viewer3D.camera.getWorldDirection(fwd);
+            yaw2D = Math.atan2(fwd.z, fwd.x);
+        }
+
+        ctx.save();
+        const zoom = Math.max(0.1, Math.abs(State.editor2D.zoom) || 1);
+        const fovDeg = 65;
+        const fovRad = (fovDeg * Math.PI) / 180;
+        const coneRadius = 100; // 100 cm range
+
+        const startAngle = yaw2D - fovRad / 2;
+        const endAngle = yaw2D + fovRad / 2;
+
+        // 1. Radar Frustum Cone Sector (FOV)
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.arc(px, py, coneRadius, startAngle, endAngle);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(6, 182, 212, 0.22)';
+        ctx.fill();
+        ctx.strokeStyle = '#06b6d4';
+        ctx.lineWidth = 1.5 / zoom;
+        ctx.stroke();
+
+        // 2. Mid-distance arc (50 cm)
+        ctx.beginPath();
+        ctx.arc(px, py, coneRadius * 0.5, startAngle, endAngle);
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.35)';
+        ctx.lineWidth = 1 / zoom;
+        ctx.stroke();
+
+        // 3. Centerline Look Ray
+        ctx.beginPath();
+        ctx.setLineDash([4 / zoom, 3 / zoom]);
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + Math.cos(yaw2D) * (coneRadius + 15), py + Math.sin(yaw2D) * (coneRadius + 15));
+        ctx.strokeStyle = '#06b6d4';
+        ctx.lineWidth = 1.2 / zoom;
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 4. Player Position Indicator
+        // Outer subtle glow
+        ctx.beginPath();
+        ctx.arc(px, py, 9 / zoom, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(6, 182, 212, 0.3)';
+        ctx.fill();
+
+        // Core dot
+        ctx.beginPath();
+        ctx.arc(px, py, 5.5 / zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#06b6d4';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.8 / zoom;
+        ctx.stroke();
+
+        // Direction pointer tick
+        ctx.beginPath();
+        ctx.moveTo(px + Math.cos(yaw2D) * (5.5 / zoom), py + Math.sin(yaw2D) * (5.5 / zoom));
+        ctx.lineTo(px + Math.cos(yaw2D) * (11 / zoom), py + Math.sin(yaw2D) * (11 / zoom));
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2 / zoom;
+        ctx.stroke();
+
+        ctx.restore();
+    },
+    
+    drawCeilingLamps(ctx) {
+        const lamps = getCeilingLampPositions(State.room);
+        const isLit = State.settings.ceilingLampsEnabled !== false;
+
+        lamps.forEach(lamp => {
+            ctx.save();
+            ctx.translate(lamp.x, lamp.y);
+
+            // 1. Illumination halo in 2D if light is switched on
+            if (isLit) {
+                const glowRadius = 45;
+                const grad = ctx.createRadialGradient(0, 0, 4, 0, 0, glowRadius);
+                grad.addColorStop(0, 'rgba(251, 191, 36, 0.22)');
+                grad.addColorStop(0.5, 'rgba(251, 191, 36, 0.08)');
+                grad.addColorStop(1, 'rgba(251, 191, 36, 0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(0, 0, glowRadius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // 2. Standard Electrical Symbol (Circle with diagonal cross ⊗ per IEC 60617)
+            const radius = 10;
+            ctx.beginPath();
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fillStyle = isLit ? 'rgba(254, 243, 199, 0.9)' : 'rgba(30, 41, 59, 0.75)';
+            ctx.fill();
+            ctx.strokeStyle = isLit ? '#d97706' : '#64748b';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Diagonal cross lines
+            const d = radius * 0.7071;
+            ctx.beginPath();
+            ctx.moveTo(-d, -d);
+            ctx.lineTo(d, d);
+            ctx.moveTo(d, -d);
+            ctx.lineTo(-d, d);
+            ctx.strokeStyle = isLit ? '#92400e' : '#475569';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            ctx.restore();
+        });
+    },
+
     drawDimensions(ctx) {
         const room = State.room;
         const wallThick = 10;
@@ -1159,7 +1699,11 @@ const Editor2D = {
     drawGrid(ctx) {
         const room = State.room;
         const step = 10; // Major lines every 50cm, minor every 10cm
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+        const isLight = typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-theme') === 'light';
+        const minorColor = isLight ? 'rgba(0, 0, 0, 0.04)' : 'rgba(255, 255, 255, 0.03)';
+        const majorColor = isLight ? 'rgba(0, 0, 0, 0.09)' : 'rgba(255, 255, 255, 0.08)';
+
+        ctx.strokeStyle = minorColor;
         ctx.lineWidth = 0.5;
         
         // Grid vertical lines
@@ -1168,10 +1712,10 @@ const Editor2D = {
             ctx.moveTo(x, 0);
             ctx.lineTo(x, room.depth);
             if (x % 50 === 0) {
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+                ctx.strokeStyle = majorColor;
                 ctx.lineWidth = 1.0;
             } else {
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+                ctx.strokeStyle = minorColor;
                 ctx.lineWidth = 0.5;
             }
             ctx.stroke();
@@ -1183,10 +1727,10 @@ const Editor2D = {
             ctx.moveTo(0, y);
             ctx.lineTo(room.width, y);
             if (y % 50 === 0) {
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+                ctx.strokeStyle = majorColor;
                 ctx.lineWidth = 1.0;
             } else {
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
+                ctx.strokeStyle = minorColor;
                 ctx.lineWidth = 0.5;
             }
             ctx.stroke();
@@ -1375,10 +1919,13 @@ const Editor2D = {
                 ctx.fillStyle = '#0b0f19'; // App background to overlap wall
                 ctx.fillRect(-halfW, -wallThick - 0.5, elem.w, wallThick + 1);
                 
-                // Draw wall jambs on the sides across wall thickness
+                // Draw architectural door casing jambs with wall return lips
                 ctx.fillStyle = '#64748b';
-                ctx.fillRect(-halfW - 2, -wallThick, 2.5, wallThick);
-                ctx.fillRect(halfW - 0.5, -wallThick, 2.5, wallThick);
+                ctx.fillRect(-halfW - 3, -wallThick - 1, 3.5, wallThick + 2);
+                ctx.fillRect(halfW - 0.5, -wallThick - 1, 3.5, wallThick + 2);
+                ctx.fillStyle = '#94a3b8';
+                ctx.fillRect(-halfW - 4.5, -2, 5.5, 2.5);
+                ctx.fillRect(halfW - 1, -2, 5.5, 2.5);
                 
                 // Thin threshold line along inner wall face (y = 0)
                 ctx.strokeStyle = '#334155';
@@ -1396,20 +1943,38 @@ const Editor2D = {
                     const anticlockwise = isLeft ? !isIn : isIn;
                     
                     // Draw swing arc
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
-                    ctx.lineWidth = 1.5;
-                    ctx.setLineDash([2, 2]);
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(217, 119, 6, 0.45)';
+                    ctx.lineWidth = 1.2;
+                    ctx.setLineDash([3, 3]);
                     ctx.beginPath();
                     ctx.arc(hX, 0, elem.w, isLeft ? 0 : Math.PI, isIn ? Math.PI / 2 : -Math.PI / 2, anticlockwise);
                     ctx.stroke();
                     ctx.setLineDash([]);
                     
-                    // Draw open door leaf
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)'));
-                    ctx.lineWidth = 3.5;
+                    // Architectural solid door leaf (3.5cm thickness)
+                    const leafThick = 3.5;
+                    const leafX = isLeft ? hX : hX - leafThick;
+                    const leafTop = isIn ? 0 : -elem.w;
+                    
+                    ctx.fillStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : '#d97706'));
+                    ctx.fillRect(leafX, leafTop, leafThick, elem.w);
+                    ctx.strokeStyle = isSelected ? '#a855f7' : '#92400e';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(leafX, leafTop, leafThick, elem.w);
+                    
+                    // Hinge pivot dot
                     ctx.beginPath();
-                    ctx.moveTo(hX, 0);
-                    ctx.lineTo(hX, leafY);
+                    ctx.arc(hX, 0, 2.5, 0, Math.PI * 2);
+                    ctx.fillStyle = '#cbd5e1';
+                    ctx.fill();
+                    
+                    // Handle indicator tick
+                    const handleY = isIn ? elem.w * 0.82 : -elem.w * 0.82;
+                    ctx.strokeStyle = '#e2e8f0';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(hX, handleY);
+                    ctx.lineTo(isLeft ? hX + 4.5 : hX - 4.5, handleY);
                     ctx.stroke();
                 } else {
                     // Double door: has two wings of width halfW
@@ -1423,9 +1988,9 @@ const Editor2D = {
                     const hX_R = halfW;
                     const anticlockwise_R = isIn;
                     
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(245, 158, 11, 0.4)';
-                    ctx.lineWidth = 1.5;
-                    ctx.setLineDash([2, 2]);
+                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'rgba(217, 119, 6, 0.45)';
+                    ctx.lineWidth = 1.2;
+                    ctx.setLineDash([3, 3]);
                     
                     // Draw Left swing arc
                     ctx.beginPath();
@@ -1439,21 +2004,24 @@ const Editor2D = {
                     
                     ctx.setLineDash([]);
                     
-                    // Draw door leaves
-                    ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : 'hsl(38, 92%, 50%)'));
-                    ctx.lineWidth = 3.5;
+                    const leafThick = 3.5;
+                    const leafColor = isSelected ? 'hsl(263, 85%, 65%)' : (elem.color || (elem.isBalcony ? '#38bdf8' : '#d97706'));
+                    ctx.fillStyle = leafColor;
+                    ctx.strokeStyle = isSelected ? '#a855f7' : '#92400e';
+                    ctx.lineWidth = 1;
                     
                     // Left leaf
-                    ctx.beginPath();
-                    ctx.moveTo(hX_L, 0);
-                    ctx.lineTo(hX_L, leafY);
-                    ctx.stroke();
+                    ctx.fillRect(hX_L, isIn ? 0 : -halfW, leafThick, halfW);
+                    ctx.strokeRect(hX_L, isIn ? 0 : -halfW, leafThick, halfW);
                     
                     // Right leaf
-                    ctx.beginPath();
-                    ctx.moveTo(hX_R, 0);
-                    ctx.lineTo(hX_R, leafY);
-                    ctx.stroke();
+                    ctx.fillRect(hX_R - leafThick, isIn ? 0 : -halfW, leafThick, halfW);
+                    ctx.strokeRect(hX_R - leafThick, isIn ? 0 : -halfW, leafThick, halfW);
+                    
+                    // Hinge dots
+                    ctx.fillStyle = '#cbd5e1';
+                    ctx.beginPath(); ctx.arc(hX_L, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(hX_R, 0, 2.5, 0, Math.PI * 2); ctx.fill();
                 }
                 
             } else if (elem.type === 'window') {
@@ -1461,29 +2029,52 @@ const Editor2D = {
                 ctx.fillStyle = '#0b0f19';
                 ctx.fillRect(-halfW, -wallThick - 0.5, elem.w, wallThick + 1);
                 
-                // Draw window frame / glass in the wall cutout (-wallThick to 0)
-                ctx.fillStyle = isSelected ? 'rgba(139, 92, 246, 0.25)' : 'rgba(56, 189, 248, 0.25)';
-                ctx.fillRect(-halfW, -wallThick, elem.w, wallThick);
+                // 1. Exterior Window Sill (Außenfensterbank)
+                ctx.strokeStyle = '#64748b';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(-halfW - 3, -wallThick - 2.5);
+                ctx.lineTo(halfW + 3, -wallThick - 2.5);
+                ctx.stroke();
                 
-                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : 'hsl(199, 89%, 48%)';
+                // 2. Interior Window Sill (Innenfensterbank)
+                ctx.strokeStyle = isSelected ? 'hsl(263, 85%, 65%)' : '#38bdf8';
                 ctx.lineWidth = 2;
-                ctx.strokeRect(-halfW, -wallThick, elem.w, wallThick);
+                ctx.beginPath();
+                ctx.moveTo(-halfW - 4, 3);
+                ctx.lineTo(halfW + 4, 3);
+                ctx.moveTo(-halfW - 4, 0);
+                ctx.lineTo(-halfW - 4, 3);
+                ctx.moveTo(halfW + 4, 0);
+                ctx.lineTo(halfW + 4, 3);
+                ctx.stroke();
                 
-                // Center glass pane divider inside wall thickness
+                // 3. Side frame jambs
+                ctx.fillStyle = '#475569';
+                ctx.fillRect(-halfW, -wallThick, 4, wallThick);
+                ctx.fillRect(halfW - 4, -wallThick, 4, wallThick);
+                
+                // 4. Translucent glass fill
+                ctx.fillStyle = isSelected ? 'rgba(139, 92, 246, 0.2)' : 'rgba(56, 189, 248, 0.15)';
+                ctx.fillRect(-halfW + 4, -wallThick, elem.w - 8, wallThick);
+                
+                // 5. Double Glazing parallel lines (Doppelverglasung)
                 ctx.strokeStyle = '#ffffff';
                 ctx.lineWidth = 1.2;
                 ctx.beginPath();
-                ctx.moveTo(-halfW, -wallThick / 2);
-                ctx.lineTo(halfW, -wallThick / 2);
+                ctx.moveTo(-halfW + 4, -wallThick * 0.68);
+                ctx.lineTo(halfW - 4, -wallThick * 0.68);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(-halfW + 4, -wallThick * 0.32);
+                ctx.lineTo(halfW - 4, -wallThick * 0.32);
                 ctx.stroke();
                 
-                // Inner sill edge (y = 0) flush with inner wall face
-                ctx.strokeStyle = '#38bdf8';
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(-halfW, 0);
-                ctx.lineTo(halfW, 0);
-                ctx.stroke();
+                // 6. Central mullion if wide
+                if (elem.w >= 100) {
+                    ctx.fillStyle = '#475569';
+                    ctx.fillRect(-1.5, -wallThick, 3, wallThick);
+                }
             } else if (elem.type === 'skylight') {
                 // Skylight is in a roof pitch. Drawn floating near the wall in 2D
                 // Its coordinates are computed based on pitch direction
@@ -1684,12 +2275,80 @@ const Editor2D = {
                     ctx.stroke();
                     ctx.restore();
                 } else {
-                    // Direction line inside circle
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-                    ctx.beginPath();
-                    ctx.moveTo(0, 0);
-                    ctx.lineTo(0, -r);
-                    ctx.stroke();
+                    const nameLower = (f.name || '').toLowerCase();
+                    const isPlant = f.isPlant || nameLower.includes('pflanze') || nameLower.includes('plant') || f.presetKey === 'plant' || f.preset === 'plant';
+                    if (isPlant) {
+                        const radius = f.w / 2;
+                        const potRadius = radius * 0.44;
+
+                        // Ground shadow
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                        ctx.beginPath();
+                        ctx.arc(2, 2, radius * 0.95, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Ceramic pot rim
+                        ctx.fillStyle = '#e2e8f0';
+                        ctx.strokeStyle = '#94a3b8';
+                        ctx.lineWidth = 1.2;
+                        ctx.beginPath();
+                        ctx.arc(0, 0, potRadius, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // Dark potting soil
+                        ctx.fillStyle = '#261c14';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, potRadius * 0.85, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // 8 Organic foliage lobes
+                        const leafCount = 8;
+                        for (let i = 0; i < leafCount; i++) {
+                            const angle = (i * Math.PI * 2) / leafCount;
+                            const leafLen = radius * (0.8 + 0.18 * Math.sin(i * 1.8));
+                            const tipX = Math.cos(angle) * leafLen;
+                            const tipY = Math.sin(angle) * leafLen;
+                            const perp = angle + Math.PI / 2;
+                            const w = 9 + 3 * Math.cos(i);
+
+                            const c1X = Math.cos(angle) * (leafLen * 0.5) + Math.cos(perp) * w;
+                            const c1Y = Math.sin(angle) * (leafLen * 0.5) + Math.sin(perp) * w;
+                            const c2X = Math.cos(angle) * (leafLen * 0.5) - Math.cos(perp) * w;
+                            const c2Y = Math.sin(angle) * (leafLen * 0.5) - Math.sin(perp) * w;
+
+                            ctx.fillStyle = i % 2 === 0 ? 'rgba(45, 106, 79, 0.75)' : 'rgba(64, 145, 108, 0.75)';
+                            ctx.strokeStyle = '#1b4332';
+                            ctx.lineWidth = 1;
+
+                            ctx.beginPath();
+                            ctx.moveTo(0, 0);
+                            ctx.quadraticCurveTo(c1X, c1Y, tipX, tipY);
+                            ctx.quadraticCurveTo(c2X, c2Y, 0, 0);
+                            ctx.fill();
+                            ctx.stroke();
+
+                            ctx.strokeStyle = 'rgba(216, 243, 220, 0.45)';
+                            ctx.lineWidth = 0.8;
+                            ctx.beginPath();
+                            ctx.moveTo(0, 0);
+                            ctx.lineTo(tipX * 0.85, tipY * 0.85);
+                            ctx.stroke();
+                        }
+
+                        // Central hub
+                        ctx.fillStyle = '#1b4332';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                    } else {
+                        // Direction line inside circle
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                        ctx.beginPath();
+                        ctx.moveTo(0, 0);
+                        ctx.lineTo(0, -r);
+                        ctx.stroke();
+                    }
                 }
             } else {
                 // Rectangle
@@ -1746,13 +2405,247 @@ const Editor2D = {
                 
                 ctx.strokeRect(-f.w / 2, -f.l / 2, f.w, f.l);
                 
-                // Draw face direction line (e.g. front of wardrobe/sofa)
+                // Draw face direction line or detailed architectural components
                 if (!f.isObstacle && !f.isRug) {
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-                    ctx.fillRect(-f.w / 2, -f.l / 2, f.w, 4); // Front edge indicator
-                    
-                    const nameLower = f.name.toLowerCase();
-                    if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
+                    const nameLower = (f.name || '').toLowerCase();
+                    const pKey = f.presetKey || f.preset || '';
+
+                    const isArcLamp = f.isLamp || nameLower.includes('bogenleuchte') || nameLower.includes('arc') || pKey === 'arc-lamp';
+                    const isLoungeChair = nameLower.includes('lounge') || pKey === 'lounge-chair';
+                    const isBookshelf = nameLower.includes('regal') || nameLower.includes('raumteiler') || nameLower.includes('bookshelf') || pKey === 'bookshelf';
+                    const isCoffeeTableSet = nameLower.includes('couchtisch') || nameLower.includes('coffee-table') || pKey === 'coffee-table-set';
+                    const isTVLowboard = nameLower.includes('lowboard') || pKey === 'tv-lowboard';
+                    const isNightstand = f.isNightstand || nameLower.includes('nachttisch') || nameLower.includes('nightstand') || pKey === 'nightstand';
+                    const isRealTV = (f.tvSize !== null && f.tvSize !== undefined) || (!nameLower.includes('lowboard') && !nameLower.includes('sideboard') && !nameLower.includes('board') && (nameLower.includes('tv') || nameLower.includes('fernseher')));
+
+                    const halfW = f.w / 2;
+                    const halfL = f.l / 2;
+
+                    if (isArcLamp) {
+                        const baseR = Math.min(f.w * 0.42, 19);
+                        const baseY = -halfL + baseR + 2;
+                        const shadeR = Math.min(f.w * 0.4, 18);
+                        const shadeY = halfL - shadeR - 2;
+
+                        // 1. Heavy Base plate (rear)
+                        ctx.fillStyle = isSelected ? 'hsl(45, 70%, 50%)' : '#475569';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+                        ctx.lineWidth = 1.5;
+                        ctx.beginPath();
+                        ctx.arc(0, baseY, baseR, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // Center mounting core
+                        ctx.fillStyle = '#0f172a';
+                        ctx.beginPath();
+                        ctx.arc(0, baseY, 4, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // 2. Curved metallic arc spine
+                        ctx.beginPath();
+                        ctx.moveTo(0, baseY);
+                        ctx.quadraticCurveTo(f.w * 0.35, (baseY + shadeY) * 0.35, 0, shadeY);
+                        ctx.strokeStyle = '#e2e8f0';
+                        ctx.lineWidth = 2.5;
+                        ctx.stroke();
+
+                        // 3. Dome Shade & Light Glow (front)
+                        try {
+                            const glowGrad = ctx.createRadialGradient(0, shadeY, 3, 0, shadeY, shadeR * 1.4);
+                            if (glowGrad && glowGrad.addColorStop) {
+                                glowGrad.addColorStop(0, 'rgba(255, 238, 187, 0.5)');
+                                glowGrad.addColorStop(0.6, 'rgba(255, 220, 140, 0.2)');
+                                glowGrad.addColorStop(1, 'rgba(255, 220, 140, 0)');
+                                ctx.fillStyle = glowGrad;
+                                ctx.beginPath();
+                                ctx.arc(0, shadeY, shadeR * 1.4, 0, Math.PI * 2);
+                                ctx.fill();
+                            }
+                        } catch (e) {}
+
+                        ctx.fillStyle = '#334155';
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 1.5;
+                        ctx.beginPath();
+                        ctx.arc(0, shadeY, shadeR, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // Inner bulb
+                        ctx.fillStyle = '#ffeedd';
+                        ctx.beginPath();
+                        ctx.arc(0, shadeY, shadeR * 0.5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                    } else if (isLoungeChair) {
+                        // Backrest pillow at rear
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+                        ctx.fillRect(-halfW + 6, -halfL + 4, f.w - 12, 16);
+                        // Backrest double stitch seam
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.lineWidth = 1;
+                        ctx.setLineDash([3, 3]);
+                        ctx.strokeRect(-halfW + 8, -halfL + 6, f.w - 16, 12);
+                        ctx.setLineDash([]);
+
+                        // Seat cushion
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+                        ctx.fillRect(-halfW + 10, -halfL + 22, f.w - 20, f.l - 28);
+                        // Center tuft line
+                        ctx.beginPath();
+                        ctx.moveTo(-halfW + 16, 2);
+                        ctx.lineTo(halfW - 16, 2);
+                        ctx.stroke();
+
+                        // Armrests
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+                        ctx.fillRect(-halfW + 2, -halfL + 8, 6, f.l - 16);
+                        ctx.fillRect(halfW - 8, -halfL + 8, 6, f.l - 16);
+
+                        // 4 leg pads at corners
+                        ctx.fillStyle = '#1e293b';
+                        const pads = [
+                            { x: -halfW + 6, y: -halfL + 8 },
+                            { x: halfW - 6, y: -halfL + 8 },
+                            { x: -halfW + 6, y: halfL - 8 },
+                            { x: halfW - 6, y: halfL - 8 }
+                        ];
+                        pads.forEach(p => {
+                            ctx.beginPath();
+                            ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+                            ctx.fill();
+                        });
+
+                    } else if (isBookshelf) {
+                        // Side upright cheeks
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                        ctx.fillRect(-halfW, -halfL, 4, f.l);
+                        ctx.fillRect(halfW - 4, -halfL, 4, f.l);
+
+                        // Asymmetric vertical partition dividers
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.lineWidth = 1.2;
+                        const d1X = -halfW + f.w * 0.35;
+                        const d2X = -halfW + f.w * 0.70;
+                        ctx.beginPath();
+                        ctx.moveTo(d1X, -halfL); ctx.lineTo(d1X, halfL);
+                        ctx.moveTo(d2X, -halfL); ctx.lineTo(d2X, halfL);
+                        ctx.stroke();
+
+                        // Top-down book spines (left bay)
+                        const bookColors = ['#1e3a5f', '#a04e38', '#556b2f', '#e2d9cb', '#2c3e50'];
+                        for (let b = 0; b < 5; b++) {
+                            ctx.fillStyle = bookColors[b % bookColors.length];
+                            ctx.fillRect(-halfW + 6 + b * 5, -halfL + 4, 3.5, f.l - 8);
+                        }
+
+                        // Top-down ceramic vase circle (right bay)
+                        ctx.fillStyle = '#ede8df';
+                        ctx.strokeStyle = '#94a3b8';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.arc(halfW - f.w * 0.15, 0, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                    } else if (isCoffeeTableSet) {
+                        // Table 2 (Lower, dark smoked oak)
+                        ctx.fillStyle = 'rgba(39, 39, 42, 0.85)';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.lineWidth = 1.2;
+                        ctx.beginPath();
+                        ctx.arc(18, 6, 20, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // Table 1 (Higher, travertine/Carrara marble)
+                        ctx.fillStyle = f.color || '#e5ded6';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                        ctx.lineWidth = 1.5;
+                        ctx.beginPath();
+                        ctx.arc(-16, -4, 26, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        // 3 Tripod leg attachment dots on Table 1
+                        ctx.fillStyle = '#18181b';
+                        for (let k = 0; k < 3; k++) {
+                            const la = (k * 2 * Math.PI) / 3;
+                            ctx.beginPath();
+                            ctx.arc(-16 + Math.cos(la) * 18, -4 + Math.sin(la) * 18, 2, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+
+                    } else if (isTVLowboard) {
+                        // 3 Cabinet compartment sections
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+                        ctx.lineWidth = 1;
+                        const c1X = -f.w / 6;
+                        const c2X = f.w / 6;
+                        ctx.beginPath();
+                        ctx.moveTo(c1X, -halfL); ctx.lineTo(c1X, halfL);
+                        ctx.moveTo(c2X, -halfL); ctx.lineTo(c2X, halfL);
+                        ctx.stroke();
+
+                        // Front acoustic vertical slat lines along front edge (+halfL)
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                        ctx.lineWidth = 1;
+                        for (let sx = -halfW + 4; sx <= halfW - 4; sx += 5) {
+                            ctx.beginPath();
+                            ctx.moveTo(sx, halfL - 5);
+                            ctx.lineTo(sx, halfL);
+                            ctx.stroke();
+                        }
+
+                        // Rear cable grommet
+                        ctx.fillStyle = '#0f172a';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.lineWidth = 0.8;
+                        ctx.beginPath();
+                        ctx.arc(0, -halfL + 6, 3, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.stroke();
+
+                    } else if (isNightstand) {
+                        // Front shadow gap & drawer lip
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+                        ctx.fillRect(-halfW + 2, halfL - 4, f.w - 4, 3);
+                        ctx.fillStyle = '#0f172a';
+                        ctx.fillRect(-8, halfL - 3, 16, 2);
+
+                        // 4 Corner hairpin leg foot pads
+                        const inset = 5;
+                        const feet = [
+                            { x: -halfW + inset, y: -halfL + inset },
+                            { x: halfW - inset, y: -halfL + inset },
+                            { x: -halfW + inset, y: halfL - inset },
+                            { x: halfW - inset, y: halfL - inset }
+                        ];
+                        ctx.fillStyle = '#1e293b';
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+                        ctx.lineWidth = 1;
+                        feet.forEach(pt => {
+                            ctx.beginPath();
+                            ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+                            ctx.fill();
+                            ctx.stroke();
+                        });
+
+                        // Staged bedside book
+                        ctx.save();
+                        ctx.translate(-f.w * 0.15, -f.l * 0.05);
+                        ctx.rotate(-0.1);
+                        const bW = 14, bL = 18;
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+                        ctx.fillRect(-bW / 2, -bL / 2, bW, bL);
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+                        ctx.strokeRect(-bW / 2, -bL / 2, bW, bL);
+                        ctx.fillStyle = '#3b82f6';
+                        ctx.fillRect(-bW / 2, -bL / 2, 2.5, bL);
+                        ctx.restore();
+
+                    } else if (isRealTV) {
                         // Draw stand foot base
                         const baseW = Math.min(f.w * 0.4, 40);
                         ctx.fillStyle = '#0f172a';
@@ -1767,11 +2660,31 @@ const Editor2D = {
                         ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
                         ctx.lineWidth = 1;
                         ctx.strokeRect(-f.w / 2 + 5, -2, f.w - 10, 4);
+
+                    } else {
+                        // Generic front edge indicator
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+                        ctx.fillRect(-halfW, -halfL, f.w, 4);
                     }
                 }
             }
             
             // Draw Text Label (Name & dimensions)
+            ctx.save();
+            
+            // In CAD & architectural drafting (DIN 1356), text labels must always be upright
+            // and readable (never upside down).
+            let textAngleLocal = 0;
+            if (f.shape !== 'circle' && f.w < f.l && (f.l - f.w) >= 30) {
+                textAngleLocal = 90;
+            }
+            const worldAngle = ((f.rotation + textAngleLocal) % 360 + 360) % 360;
+            if (worldAngle > 90 && worldAngle <= 270) {
+                ctx.rotate((textAngleLocal + 180) * Math.PI / 180);
+            } else if (textAngleLocal !== 0) {
+                ctx.rotate(textAngleLocal * Math.PI / 180);
+            }
+            
             ctx.fillStyle = f.isColliding ? '#fecaca' : '#f8fafc';
             ctx.font = '10px Plus Jakarta Sans, sans-serif';
             ctx.textAlign = 'center';
@@ -1781,10 +2694,21 @@ const Editor2D = {
             if (f.locked) {
                 nameText = '🔒 ' + nameText;
             }
+            
+            const labelSpan = textAngleLocal === 90 ? f.l : f.w;
+            const availableSpan = Math.max(20, labelSpan - 12);
+            const m = ctx.measureText(nameText);
+            if (m.width > availableSpan) {
+                const s = Math.max(0.7, availableSpan / m.width);
+                ctx.font = (Math.round(10 * s)) + 'px Plus Jakarta Sans, sans-serif';
+            }
+            
             ctx.fillText(nameText, 0, -4);
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.font = '8px Outfit';
-            ctx.fillText(`${formatDim(f.w)}x${formatDim(f.l)}x${formatDim(f.h)}`, 0, 8);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.font = '8px Outfit, sans-serif';
+            ctx.fillText(formatDim(f.w) + 'x' + formatDim(f.l) + 'x' + formatDim(f.h), 0, 8);
+            
+            ctx.restore();
             
             // Draw Handles if selected
             if (isSelected) {
@@ -2062,9 +2986,26 @@ const Editor2D = {
                 }
             } else {
                 // Normal furniture
+                const snappingActive = State.settings.smartSnappingEnabled !== false && !e.altKey && !e.shiftKey;
+                let activeGuides = [];
+
                 if (e.shiftKey) {
                     f.x = Math.round(newX * 10) / 10;
                     f.y = Math.round(newY * 10) / 10;
+                } else if (snappingActive) {
+                    const otherFurniture = State.furniture.filter(item => item !== f && item.id !== f.id);
+                    const snapThreshold = 10; // 10cm world units
+                    const snapResult = SmartSnapping.computeSnap(
+                        { ...f, x: newX, y: newY },
+                        otherFurniture,
+                        State.room,
+                        snapThreshold
+                    );
+
+                    const step = State.settings.gridEnabled ? State.settings.gridSize : 1;
+                    f.x = snapResult.snappedAxes.x ? snapResult.snappedX : (State.settings.gridEnabled ? Math.round(newX / step) * step : Math.round(newX));
+                    f.y = snapResult.snappedAxes.y ? snapResult.snappedY : (State.settings.gridEnabled ? Math.round(newY / step) * step : Math.round(newY));
+                    activeGuides = snapResult.guides;
                 } else {
                     if (State.settings.gridEnabled) {
                         const step = State.settings.gridSize;
@@ -2075,7 +3016,10 @@ const Editor2D = {
                         f.y = Math.round(newY);
                     }
                 }
+                State.editor2D.activeGuides = activeGuides;
             }
+            
+            CollisionEngine.clampFurnitureToRoom(f);
             
             // Update collision checks
             CollisionEngine.updateAllCollisions();
@@ -2100,6 +3044,7 @@ const Editor2D = {
             }
             
             f.rotation = angleDeg % 360;
+            CollisionEngine.clampFurnitureToRoom(f);
             CollisionEngine.updateAllCollisions();
             this.draw();
             syncPropertiesPanel();
@@ -2120,6 +3065,7 @@ const Editor2D = {
             }
             f.w = newW;
             
+            CollisionEngine.clampFurnitureToRoom(f);
             CollisionEngine.updateAllCollisions();
             this.draw();
             syncPropertiesPanel();
@@ -2138,6 +3084,7 @@ const Editor2D = {
             }
             f.l = newL;
             
+            CollisionEngine.clampFurnitureToRoom(f);
             CollisionEngine.updateAllCollisions();
             this.draw();
             syncPropertiesPanel();
@@ -2273,6 +3220,10 @@ const Editor2D = {
     },
     
     handleMouseUp() {
+        if (State.editor2D.draggedItem && State.selectedItemType === 'furniture') {
+            CollisionEngine.clampFurnitureToRoom(State.editor2D.draggedItem);
+        }
+        State.editor2D.activeGuides = [];
         State.editor2D.dragMode = null;
         State.editor2D.draggedItem = null;
         this.draw();
@@ -2381,18 +3332,21 @@ const Editor2D = {
         if (!State.selectedItem) return;
         History.pushState();
         
-        if (State.selectedItemType === 'furniture') {
-            State.furniture = State.furniture.filter(item => item !== State.selectedItem);
-            if (Viewer3D.renderer) Viewer3D.removeFurniture3D(State.selectedItem);
-        } else if (State.selectedItemType === 'element') {
-            State.elements = State.elements.filter(item => item !== State.selectedItem);
+        const itemToDelete = State.selectedItem;
+        const itemType = State.selectedItemType;
+        selectItem(null, null);
+
+        if (itemType === 'furniture') {
+            State.furniture = State.furniture.filter(item => item !== itemToDelete);
+            if (Viewer3D.renderer) Viewer3D.removeFurniture3D(itemToDelete);
+        } else if (itemType === 'element') {
+            State.elements = State.elements.filter(item => item !== itemToDelete);
             if (Viewer3D.renderer) Viewer3D.rebuildWalls3D();
-        } else if (State.selectedItemType === 'installation') {
-            State.installations = State.installations.filter(item => item !== State.selectedItem);
+        } else if (itemType === 'installation') {
+            State.installations = State.installations.filter(item => item !== itemToDelete);
             if (Viewer3D.renderer) Viewer3D.updateInstallations3D();
         }
         
-        selectItem(null, null);
         CollisionEngine.updateAllCollisions();
         this.draw();
         updatePlacedListsUI();
@@ -2715,6 +3669,20 @@ const TextureGenerator = {
 
     // --- PROCEDURAL / AI FLOOR TEXTURES ---
     createFloorTexture(type) {
+        if (typeof document === 'undefined') {
+            return { width: 512, height: 512 };
+        }
+        if (type === 'parkett_eiche') type = 'parquet_oak';
+        if (type === 'fischgraet' || type === 'parquet_herringbone') type = 'herringbone';
+        if (type === 'esche_hell') type = 'wood_ash';
+        if (type === 'walnuss_dunkel') type = 'wood_walnut';
+        if (type === 'fliesen_grau') type = 'tiles_gray';
+        if (type === 'marmor_weiss') type = 'marble_white';
+        if (type === 'beton_estrich') type = 'concrete';
+        if (type === 'terrazzo_modern') type = 'terrazzo';
+        if (type === 'schiefer_anthrazit') type = 'tiles_slate';
+        if (type === 'teppich_greige' || type === 'carpet_boucle') type = 'carpet_warm';
+
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 512;
@@ -3008,6 +3976,20 @@ const TextureGenerator = {
     },
     
     createFloorBump(type) {
+        if (typeof document === 'undefined') {
+            return { width: 512, height: 512 };
+        }
+        if (type === 'parkett_eiche') type = 'parquet_oak';
+        if (type === 'fischgraet' || type === 'parquet_herringbone') type = 'herringbone';
+        if (type === 'esche_hell') type = 'wood_ash';
+        if (type === 'walnuss_dunkel') type = 'wood_walnut';
+        if (type === 'fliesen_grau') type = 'tiles_gray';
+        if (type === 'marmor_weiss') type = 'marble_white';
+        if (type === 'beton_estrich') type = 'concrete';
+        if (type === 'terrazzo_modern') type = 'terrazzo';
+        if (type === 'schiefer_anthrazit') type = 'tiles_slate';
+        if (type === 'teppich_greige' || type === 'carpet_boucle') type = 'carpet_warm';
+
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 512;
@@ -3016,7 +3998,17 @@ const TextureGenerator = {
         ctx.fillStyle = '#808080';
         ctx.fillRect(0, 0, 512, 512);
         
-        if (type.includes('parquet') || type.includes('wood')) {
+        if (type === 'herringbone') {
+            const blockW = 64;
+            const blockH = 128;
+            ctx.strokeStyle = '#202020';
+            ctx.lineWidth = 1.8;
+            for (let y = -blockH; y < 512 + blockH; y += blockW) {
+                for (let x = -blockW; x < 512 + blockW; x += blockW * 2) {
+                    ctx.strokeRect(x, y, blockW, blockH);
+                }
+            }
+        } else if (type.includes('parquet') || type.includes('wood') || type === 'parkett_eiche') {
             const plankW = 128;
             ctx.strokeStyle = '#202020';
             ctx.lineWidth = 2.5;
@@ -3038,11 +4030,216 @@ const TextureGenerator = {
                     ctx.beginPath(); ctx.arc(x + 3, y + 3, 2, 0, Math.PI * 2); ctx.fill();
                 }
             }
+        } else if (type === 'concrete') {
+            for (let i = 0; i < 2000; i++) {
+                const rx = Math.random() * 512;
+                const ry = Math.random() * 512;
+                ctx.fillStyle = Math.random() > 0.5 ? '#909090' : '#707070';
+                ctx.fillRect(rx, ry, 2, 2);
+            }
         }
         
         const tex = new THREE.CanvasTexture(canvas);
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+
+    // Generator für feinkörnige Putz-Bump-Map (Wand & Decke)
+    createWallPlasterBump() {
+        if (typeof document === 'undefined') {
+            return { width: 256, height: 256 };
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        
+        if (ctx.createImageData && ctx.putImageData) {
+            const imgData = ctx.createImageData(256, 256);
+            const d = imgData.data;
+            
+            // Feinkörniges Grundrauschen (Sandkorn / Putzkorn)
+            for (let i = 0; i < d.length; i += 4) {
+                const grain = (Math.random() - 0.5) * 36;
+                const v = Math.min(255, Math.max(0, Math.round(128 + grain)));
+                d[i] = v;
+                d[i + 1] = v;
+                d[i + 2] = v;
+                d[i + 3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+        } else {
+            ctx.fillStyle = '#808080';
+            ctx.fillRect(0, 0, 256, 256);
+        }
+        
+        // Mehrskalige Stippling-Punkte (Spachtelzüge / Mikroporen)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        for (let i = 0; i < 500; i++) {
+            const rx = Math.random() * 256;
+            const ry = Math.random() * 256;
+            const r = Math.random() * 1.5 + 0.5;
+            ctx.beginPath();
+            ctx.arc(rx, ry, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+        for (let i = 0; i < 500; i++) {
+            const rx = Math.random() * 256;
+            const ry = Math.random() * 256;
+            const r = Math.random() * 1.5 + 0.5;
+            ctx.beginPath();
+            ctx.arc(rx, ry, r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    },
+    
+    // Vorschau-URL für UI-Kacheln
+    _previewCache: {},
+    getFloorPreviewUrl(type) {
+        if (!this._previewCache) this._previewCache = {};
+        if (this._previewCache[type]) return this._previewCache[type];
+        try {
+            const tex = this.createFloorTexture(type);
+            if (tex && tex.image && typeof tex.image.toDataURL === 'function') {
+                this._previewCache[type] = tex.image.toDataURL('image/jpeg', 0.85);
+                return this._previewCache[type];
+            }
+        } catch (e) {
+            // Fallback
+        }
+        return '';
+    },
+
+    // --- PROCEDURAL DOOR TEXTURE & BUMP ---
+    _doorTexCache: {},
+    createDoorTexture(colorHex = '#8b5a2b') {
+        if (typeof document === 'undefined') {
+            return { width: 512, height: 1024 };
+        }
+        if (!this._doorTexCache) this._doorTexCache = {};
+        if (this._doorTexCache[colorHex]) return this._doorTexCache[colorHex];
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d');
+        
+        // Base tone
+        ctx.fillStyle = colorHex;
+        ctx.fillRect(0, 0, 512, 1024);
+        
+        // Vertical grain fibers
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+        for (let i = 0; i < 60; i++) {
+            const x = Math.random() * 512;
+            const w = Math.random() * 15 + 3;
+            ctx.fillRect(x, 0, w, 1024);
+        }
+        
+        // Longitudinal organic wood curves
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 350; i++) {
+            ctx.beginPath();
+            const x = Math.random() * 512;
+            ctx.moveTo(x, 0);
+            ctx.bezierCurveTo(
+                x + (Math.random() - 0.5) * 12, 300,
+                x + (Math.random() - 0.5) * 12, 700,
+                x + (Math.random() - 0.5) * 6, 1024
+            );
+            ctx.stroke();
+        }
+        
+        // Subtle micro-highlights
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+        for (let i = 0; i < 180; i++) {
+            ctx.beginPath();
+            const x = Math.random() * 512;
+            ctx.moveTo(x, 0);
+            ctx.bezierCurveTo(x + (Math.random() - 0.5) * 8, 300, x + (Math.random() - 0.5) * 8, 700, x, 1024);
+            ctx.stroke();
+        }
+        
+        // Architectural recessed panels (2 stacked panels)
+        const marginX = 64;
+        const panelW = 512 - marginX * 2;
+        [{ y: 80, h: 380 }, { y: 520, h: 420 }].forEach(p => {
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(marginX, p.y, panelW, p.h);
+            
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.06)';
+            ctx.fillRect(marginX + 2, p.y + 2, panelW - 4, 8);
+            ctx.fillRect(marginX + 2, p.y + 2, 8, p.h - 4);
+            
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+            ctx.fillRect(marginX + 2, p.y + p.h - 10, panelW - 4, 8);
+            ctx.fillRect(marginX + panelW - 10, p.y + 2, 8, p.h - 4);
+        });
+        
+        // Edge chamfer highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.fillRect(0, 0, 5, 1024);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+        ctx.fillRect(507, 0, 5, 1024);
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = (THREE.ClampToEdgeWrapping !== undefined) ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+        tex.wrapT = (THREE.ClampToEdgeWrapping !== undefined) ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+        this._doorTexCache[colorHex] = tex;
+        return tex;
+    },
+    
+    _doorBumpCache: null,
+    createDoorBump() {
+        if (typeof document === 'undefined') {
+            return { width: 512, height: 1024 };
+        }
+        if (this._doorBumpCache) return this._doorBumpCache;
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(0, 0, 512, 1024);
+        
+        ctx.strokeStyle = '#707070';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 250; i++) {
+            const x = Math.random() * 512;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x + (Math.random() - 0.5) * 8, 1024);
+            ctx.stroke();
+        }
+        
+        const marginX = 64;
+        const panelW = 512 - marginX * 2;
+        [{ y: 80, h: 380 }, { y: 520, h: 420 }].forEach(p => {
+            ctx.strokeStyle = '#555555';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(marginX, p.y, panelW, p.h);
+            
+            ctx.strokeStyle = '#aaaaaa';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(marginX + 3, p.y + 3, panelW - 6, p.h - 6);
+        });
+        
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.wrapS = (THREE.ClampToEdgeWrapping !== undefined) ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+        tex.wrapT = (THREE.ClampToEdgeWrapping !== undefined) ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+        this._doorBumpCache = tex;
         return tex;
     }
 };
@@ -3050,32 +4247,36 @@ const TextureGenerator = {
 // Central registry for floor and carpet textures
 const TextureRegistry = {
     floors: [
+        // --- Fototexturen (Assets) ---
         {
             id: 'laminat_hell',
             name: 'Laminat Hell',
             desc: 'Eiche Landhausdiele',
             file: 'texturen/laminat_hell.jpg',
-            defaultScale: 160, // cm pro Textur-Breite (natürliche Dielenbreite)
+            defaultScale: 160,
             roughness: 0.82,
-            metalness: 0.0
+            metalness: 0.0,
+            thumbClass: 'floor-thumb'
         },
         {
             id: 'anthrazit_holz',
             name: 'Holzboden Anthrazit',
             desc: 'Parkett Carbon',
             file: 'texturen/anthrazit_holz_boden_textur.jpg',
-            defaultScale: 180, // cm pro Textur-Breite
+            defaultScale: 180,
             roughness: 0.85,
-            metalness: 0.0
+            metalness: 0.0,
+            thumbClass: 'floor-thumb'
         },
         {
             id: 'teppich_flach',
             name: 'Teppichboden Schlinge',
             desc: 'Flachgewebe Anthrazit',
             file: 'texturen/teppich_textur_flach.jpg',
-            defaultScale: 60, // cm pro Textur-Wiederholung
+            defaultScale: 60,
             roughness: 0.96,
-            metalness: 0.0
+            metalness: 0.0,
+            thumbClass: 'floor-thumb'
         },
         {
             id: 'teppich_hoch',
@@ -3083,9 +4284,140 @@ const TextureRegistry = {
             desc: 'Shaggy Kuschelflor',
             file: 'texturen/teppich_hoch.jpg',
             normalMap: 'texturen/teppich_hoch_normal.jpg',
-            defaultScale: 55, // cm pro Textur-Wiederholung
+            defaultScale: 55,
             roughness: 0.98,
-            metalness: 0.0
+            metalness: 0.0,
+            thumbClass: 'floor-thumb'
+        },
+        // --- Prozedurale Böden (Canvas PBR) ---
+        {
+            id: 'parquet_oak',
+            aliases: ['parkett_eiche'],
+            name: 'Eichenparkett Natur',
+            desc: 'Klassische Eichendielen',
+            procedural: true,
+            defaultScale: 160,
+            roughness: 0.78,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.04,
+            thumbClass: 'floor-thumb-parquet'
+        },
+        {
+            id: 'herringbone',
+            aliases: ['fischgraet', 'parquet_herringbone'],
+            name: 'Fischgrät-Parkett',
+            desc: 'Eiche Fischgrät Classic',
+            procedural: true,
+            defaultScale: 120,
+            roughness: 0.75,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.04,
+            thumbClass: 'floor-thumb-herringbone'
+        },
+        {
+            id: 'wood_ash',
+            aliases: ['esche_hell'],
+            name: 'Skandi-Esche',
+            desc: 'Helles Skandi-Parkett',
+            procedural: true,
+            defaultScale: 160,
+            roughness: 0.80,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.03,
+            thumbClass: 'floor-thumb-ash'
+        },
+        {
+            id: 'wood_walnut',
+            aliases: ['walnuss_dunkel'],
+            name: 'Walnuss-Parkett',
+            desc: 'Edles dunkles Nussholz',
+            procedural: true,
+            defaultScale: 160,
+            roughness: 0.76,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.03,
+            thumbClass: 'floor-thumb-walnut'
+        },
+        {
+            id: 'tiles_gray',
+            aliases: ['fliesen_grau'],
+            name: 'Feinsteinzeug Grau',
+            desc: 'Moderne Fliesen 60x60',
+            procedural: true,
+            defaultScale: 120,
+            roughness: 0.65,
+            metalness: 0.02,
+            hasBump: true,
+            bumpScale: 0.05,
+            thumbClass: 'floor-thumb-tiles'
+        },
+        {
+            id: 'marble_white',
+            aliases: ['marmor_weiss'],
+            name: 'Carrara-Marmor',
+            desc: 'Weißer Marmor mit Äderung',
+            procedural: true,
+            defaultScale: 150,
+            roughness: 0.35,
+            metalness: 0.05,
+            hasBump: true,
+            bumpScale: 0.03,
+            thumbClass: 'floor-thumb-marble'
+        },
+        {
+            id: 'concrete',
+            aliases: ['beton_estrich'],
+            name: 'Sichtbeton Loft',
+            desc: 'Industrie-Estrich glatt',
+            procedural: true,
+            defaultScale: 200,
+            roughness: 0.88,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.02,
+            thumbClass: 'floor-thumb-concrete'
+        },
+        {
+            id: 'terrazzo',
+            aliases: ['terrazzo_modern'],
+            name: 'Terrazzo Modern',
+            desc: 'Bunte Naturstein-Splitter',
+            procedural: true,
+            defaultScale: 140,
+            roughness: 0.70,
+            metalness: 0.02,
+            hasBump: false,
+            thumbClass: 'floor-thumb-terrazzo'
+        },
+        {
+            id: 'tiles_slate',
+            aliases: ['schiefer_anthrazit'],
+            name: 'Schiefer Anthrazit',
+            desc: 'Spalt-Schieferfliesen',
+            procedural: true,
+            defaultScale: 120,
+            roughness: 0.80,
+            metalness: 0.02,
+            hasBump: true,
+            bumpScale: 0.05,
+            thumbClass: 'floor-thumb-slate'
+        },
+        {
+            id: 'carpet_warm',
+            aliases: ['teppich_greige', 'carpet_boucle'],
+            name: 'Teppich Greige',
+            desc: 'Warmer Bouclé Teppichboden',
+            procedural: true,
+            defaultScale: 80,
+            roughness: 0.95,
+            metalness: 0.0,
+            hasBump: true,
+            bumpScale: 0.04,
+            thumbClass: 'floor-thumb-carpet'
         }
     ],
     carpets: [
@@ -3229,12 +4561,38 @@ const TextureCache = {
     },
     
     getFloorTexture(id) {
-        const def = TextureRegistry.floors.find(f => f.id === id) || TextureRegistry.floors[0];
+        const def = TextureRegistry.floors.find(f => f.id === id || (f.aliases && f.aliases.includes(id))) || TextureRegistry.floors[0];
+        
+        if (def.procedural || !def.file) {
+            const cacheKey = 'proc_floor_' + def.id;
+            const bumpKey = 'proc_bump_' + def.id;
+            if (!this.textures[cacheKey]) {
+                this.textures[cacheKey] = TextureGenerator.createFloorTexture(def.id);
+            }
+            if (def.hasBump && !this.textures[bumpKey]) {
+                this.textures[bumpKey] = TextureGenerator.createFloorBump(def.id);
+            }
+            return {
+                map: this.textures[cacheKey],
+                normalMap: null,
+                bumpMap: this.textures[bumpKey] || null,
+                def: def
+            };
+        }
+        
         return {
             map: this.load(def.file, true),
             normalMap: def.normalMap ? this.load(def.normalMap, true) : null,
+            bumpMap: null,
             def: def
         };
+    },
+    
+    getWallPlasterBump() {
+        if (!this.textures['wall_plaster_bump']) {
+            this.textures['wall_plaster_bump'] = TextureGenerator.createWallPlasterBump();
+        }
+        return this.textures['wall_plaster_bump'];
     },
     
     getCarpetTexture(id, colorHex) {
@@ -3333,11 +4691,219 @@ const Viewer3D = {
     doorMeshes: [],
     windowMeshes: [],
     pitchCheekMeshes: [],
+    ceilingLampMeshes: [],
+    ceilingLampLights: [],
     sunLight: null,
     headlight: null,
     keys: {},
     pointerDownPos: null,
     flatCeilingMesh: null,
+    
+    // First-Person Walkthrough State
+    isWalkthrough: false,
+    walkthroughHeight: 165, // cm (1:1 units matching Three.js world coordinates)
+    walkthroughMargin: 25,  // cm wall boundary collision margin
+    walkthroughSpeed: 3.0,  // cm per frame
+    walkthroughYaw: 0,      // radians
+    walkthroughPitch: 0,    // radians
+    savedOrbitState: null,
+    isMouseDown: false,
+    lastMousePos: { x: 0, y: 0 },
+    showRadarAlways: false,
+
+    get walkthroughPosition() {
+        if (!this.camera && typeof THREE !== 'undefined' && THREE.PerspectiveCamera) {
+            this.camera = new THREE.PerspectiveCamera(45, 1, 1, 3000);
+        }
+        if (!this.camera || !this.camera.position) {
+            return { x: 0, y: 0, worldX: 0, worldY: this.walkthroughHeight, worldZ: 0, height: this.walkthroughHeight };
+        }
+        const room = State.room || { width: 500, depth: 400 };
+        return {
+            x: this.camera.position.x + room.width / 2,
+            y: this.camera.position.z + room.depth / 2,
+            worldX: this.camera.position.x,
+            worldY: this.camera.position.y,
+            worldZ: this.camera.position.z,
+            height: this.camera.position.y
+        };
+    },
+
+    set walkthroughPosition(pos) {
+        if (!pos) return;
+        if (!this.camera && typeof THREE !== 'undefined' && THREE.PerspectiveCamera) {
+            this.camera = new THREE.PerspectiveCamera(45, 1, 1, 3000);
+        }
+        if (!this.camera || !this.camera.position) return;
+        const room = State.room || { width: 500, depth: 400 };
+        const margin = this.walkthroughMargin || 25;
+        
+        let wx = 0;
+        let wz = 0;
+        let wy = typeof pos.height === 'number' ? pos.height : (typeof pos.worldY === 'number' ? pos.worldY : this.walkthroughHeight);
+
+        if (typeof pos.x === 'number' && typeof pos.y === 'number') {
+            wx = pos.x - room.width / 2;
+            wz = pos.y - room.depth / 2;
+        } else if (typeof pos.worldX === 'number' && typeof pos.worldZ === 'number') {
+            wx = pos.worldX;
+            wz = pos.worldZ;
+        }
+
+        const minX = -room.width / 2 + margin;
+        const maxX = room.width / 2 - margin;
+        const minZ = -room.depth / 2 + margin;
+        const maxZ = room.depth / 2 - margin;
+
+        if (maxX >= minX) {
+            wx = Math.max(minX, Math.min(maxX, wx));
+        } else {
+            wx = 0;
+        }
+
+        if (maxZ >= minZ) {
+            wz = Math.max(minZ, Math.min(maxZ, wz));
+        } else {
+            wz = 0;
+        }
+
+        this.camera.position.set(wx, wy, wz);
+        if (this.controls && this.controls.target && typeof THREE !== 'undefined' && THREE.Vector3) {
+            const fwd = new THREE.Vector3(-Math.sin(this.walkthroughYaw || 0), 0, -Math.cos(this.walkthroughYaw || 0));
+            if (this.controls.target.copy) this.controls.target.copy(this.camera.position);
+            if (this.controls.target.add && fwd.multiplyScalar) this.controls.target.add(fwd.multiplyScalar(100));
+        }
+        if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+            Editor2D.draw();
+        }
+    },
+
+    get walkthroughAngle() {
+        let deg = ((-this.walkthroughYaw * 180) / Math.PI) % 360;
+        if (deg < 0) deg += 360;
+        return deg;
+    },
+
+    set walkthroughAngle(val) {
+        let rad = typeof val === 'number' ? (val * Math.PI) / 180 : 0;
+        this.walkthroughYaw = -rad;
+        this.updateCameraRotation();
+        if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+            Editor2D.draw();
+        }
+    },
+
+    updateCameraRotation() {
+        if (!this.camera) return;
+        this.walkthroughPitch = Math.max(-1.4, Math.min(1.4, this.walkthroughPitch));
+        if (this.camera.rotation) {
+            this.camera.rotation.order = 'YXZ';
+            this.camera.rotation.set(this.walkthroughPitch, this.walkthroughYaw, 0, 'YXZ');
+        }
+    },
+
+    setWalkthroughMode(active) {
+        const nextActive = !!active;
+        if (this.isWalkthrough === nextActive) return; // Prevent re-entrant clobbering of savedOrbitState
+        this.isWalkthrough = nextActive;
+
+        if (!this.camera && typeof THREE !== 'undefined' && THREE.PerspectiveCamera) {
+            this.camera = new THREE.PerspectiveCamera(45, 1, 1, 3000);
+        }
+        if (!this.controls && typeof THREE !== 'undefined' && THREE.OrbitControls) {
+            this.controls = new THREE.OrbitControls(this.camera, null);
+        }
+
+        if (this.isWalkthrough) {
+            if (this.camera && this.controls) {
+                this.savedOrbitState = {
+                    position: this.camera.position.clone ? this.camera.position.clone() : Object.assign({}, this.camera.position),
+                    target: this.controls.target && this.controls.target.clone ? this.controls.target.clone() : Object.assign({}, this.controls.target)
+                };
+                this.controls.enabled = false;
+            }
+
+            const room = State.room || { width: 500, depth: 400 };
+            const margin = this.walkthroughMargin || 25;
+            const minX = -room.width / 2 + margin;
+            const maxX = room.width / 2 - margin;
+            const minZ = -room.depth / 2 + margin;
+            const maxZ = room.depth / 2 - margin;
+
+            if (this.camera && this.camera.position) {
+                let curX = this.camera.position.x;
+                let curZ = this.camera.position.z;
+                if (curX < minX || curX > maxX || curZ < minZ || curZ > maxZ) {
+                    curX = 0;
+                    curZ = room.depth / 4;
+                }
+                this.camera.position.set(curX, this.walkthroughHeight, curZ);
+
+                if (this.controls && this.controls.target) {
+                    const dir = new THREE.Vector3().subVectors(this.controls.target, this.camera.position);
+                    dir.y = 0;
+                    if (dir.lengthSq() > 0.001) {
+                        dir.normalize();
+                        this.walkthroughYaw = Math.atan2(-dir.x, -dir.z);
+                    } else {
+                        this.walkthroughYaw = 0;
+                    }
+                }
+                this.walkthroughPitch = 0;
+                this.updateCameraRotation();
+            }
+
+            if (State.settings && (State.settings.viewMode === '2d' || State.settings.viewMode === '3d')) {
+                const btnSplit = typeof document !== 'undefined' ? document.getElementById('btn-view-split') : null;
+                if (btnSplit && typeof btnSplit.click === 'function') {
+                    btnSplit.click();
+                } else if (State.settings) {
+                    State.settings.viewMode = 'split';
+                }
+            }
+
+            if (typeof document !== 'undefined') {
+                const btnWalk = document.getElementById('btn-walkthrough');
+                if (btnWalk && btnWalk.classList) btnWalk.classList.add('active');
+            }
+        } else {
+            if (this.controls) {
+                this.controls.enabled = true;
+                if (this.savedOrbitState && this.camera && this.camera.position) {
+                    if (this.camera.position.copy) this.camera.position.copy(this.savedOrbitState.position);
+                    else Object.assign(this.camera.position, this.savedOrbitState.position);
+                    if (this.controls.target) {
+                        if (this.controls.target.copy) this.controls.target.copy(this.savedOrbitState.target);
+                        else Object.assign(this.controls.target, this.savedOrbitState.target);
+                    }
+                }
+                this.savedOrbitState = null; // Clear saved state upon exit
+            }
+
+            if (typeof document !== 'undefined') {
+                const btnWalk = document.getElementById('btn-walkthrough');
+                if (btnWalk && btnWalk.classList) btnWalk.classList.remove('active');
+                if (document.exitPointerLock && document.pointerLockElement) {
+                    try { document.exitPointerLock(); } catch(e) {}
+                }
+            }
+        }
+
+        if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+            Editor2D.draw();
+        }
+    },
+    
+    setTheme(theme) {
+        if (this.scene && typeof THREE !== 'undefined') {
+            const col = theme === 'dark' ? 0x09090b : 0xf8fafc;
+            this.scene.background = new THREE.Color(col);
+        }
+    },
+    
+    updateTheme(theme) {
+        this.setTheme(theme);
+    },
     
     init() {
         this.container = document.getElementById('threeCanvasContainer');
@@ -3345,19 +4911,25 @@ const Viewer3D = {
         
         // Scene setup
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x0e1320);
+        const initialTheme = (typeof document !== 'undefined' && document.documentElement && document.documentElement.getAttribute('data-theme')) || 'dark';
+        this.scene.background = new THREE.Color(initialTheme === 'dark' ? 0x09090b : 0xf8fafc);
         
         // Camera setup
         this.camera = new THREE.PerspectiveCamera(45, this.container.clientWidth / this.container.clientHeight, 1, 3000);
         this.camera.position.set(400, 500, 600);
         
-        // Renderer setup
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // Renderer setup (preserveDrawingBuffer enables high-res PNG snapshot export)
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: true });
         this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        if (THREE.sRGBEncoding !== undefined) {
+            this.renderer.outputEncoding = THREE.sRGBEncoding;
+        }
+        this.renderer.physicallyCorrectLights = true;
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        this.renderer.toneMappingExposure = 0.95;
+        this.renderer.toneMappingExposure = 1.0;
         this.container.appendChild(this.renderer.domElement);
         
         // Orbit Controls
@@ -3385,7 +4957,8 @@ const Viewer3D = {
         this.sunLight.shadow.mapSize.height = 2048;
         this.sunLight.shadow.camera.near = 50;
         this.sunLight.shadow.camera.far = 5000;
-        this.sunLight.shadow.bias = -0.0005; // avoid shadow acne / stripes
+        this.sunLight.shadow.bias = -0.0008; // avoid shadow acne / stripes
+        this.sunLight.shadow.normalBias = 0.02;
         const d = 1000;
         this.sunLight.shadow.camera.left = -d;
         this.sunLight.shadow.camera.right = d;
@@ -3403,6 +4976,7 @@ const Viewer3D = {
         // Event listeners
         window.addEventListener('resize', () => this.resizeViewer());
         this.initKeyboardControls();
+        this.initWalkthroughControls();
         this.initWallClickRaycaster();
         
         // Start animation loop
@@ -3414,59 +4988,181 @@ const Viewer3D = {
     
     initKeyboardControls() {
         window.addEventListener('keydown', (e) => {
-            if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+            if (typeof document !== 'undefined' && document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
             const code = e.code;
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
                 if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) {
-                    e.preventDefault(); // Verhindere Browser-Scrollen bei Pfeiltasten & Leertaste
+                    if (e.preventDefault) e.preventDefault();
                 }
                 this.keys[code] = true;
             }
         });
         window.addEventListener('keyup', (e) => {
             const code = e.code;
-            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'].includes(code)) {
                 this.keys[code] = false;
             }
+        });
+    },
+
+    initWalkthroughControls() {
+        if (!this.container) return;
+
+        this.container.addEventListener('click', () => {
+            if (this.isWalkthrough && this.renderer && this.renderer.domElement) {
+                try {
+                    const canvas = this.renderer.domElement;
+                    if (canvas.requestPointerLock && typeof document !== 'undefined' && document.pointerLockElement !== canvas) {
+                        const lockPromise = canvas.requestPointerLock();
+                        if (lockPromise && lockPromise.catch) {
+                            lockPromise.catch(() => {});
+                        }
+                    }
+                } catch (e) {}
+            }
+        });
+
+        this.container.addEventListener('mousedown', (e) => {
+            if (this.isWalkthrough) {
+                this.isMouseDown = true;
+                this.lastMousePos = { x: e.clientX, y: e.clientY };
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            this.isMouseDown = false;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!this.isWalkthrough) return;
+            const canvas = this.renderer ? this.renderer.domElement : null;
+            const isLocked = typeof document !== 'undefined' && document.pointerLockElement === canvas;
+
+            let dx = 0;
+            let dy = 0;
+
+            if (isLocked) {
+                dx = e.movementX || 0;
+                dy = e.movementY || 0;
+            } else if (this.isMouseDown) {
+                dx = e.clientX - this.lastMousePos.x;
+                dy = e.clientY - this.lastMousePos.y;
+                this.lastMousePos = { x: e.clientX, y: e.clientY };
+            }
+
+            if (dx !== 0 || dy !== 0) {
+                const sensitivity = 0.0025;
+                this.walkthroughYaw -= dx * sensitivity;
+                this.walkthroughPitch -= dy * sensitivity;
+                this.updateCameraRotation();
+                if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+                    Editor2D.draw();
+                }
+            }
+        });
+
+        window.addEventListener('blur', () => {
+            this.keys = {};
+            this.isMouseDown = false;
         });
     },
     
     initWallClickRaycaster() {
         if (!this.renderer) return;
+        
+        // Cache reusable raycaster and pointer vector
+        if (!this.raycaster) this.raycaster = new THREE.Raycaster();
+        if (!this.mouseVec) this.mouseVec = new THREE.Vector2();
+        
         this.renderer.domElement.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return; // Primary left button only
             this.pointerDownPos = { x: e.clientX, y: e.clientY };
+            this.pointerDownTime = performance.now();
         });
+        
         this.renderer.domElement.addEventListener('pointerup', (e) => {
-            if (!this.pointerDownPos) return;
+            if (!this.pointerDownPos || e.button !== 0) return;
             const dist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
+            const duration = performance.now() - (this.pointerDownTime || 0);
             this.pointerDownPos = null;
-            if (dist > 5) return; // Orbit drag, not a clean click
+            this.pointerDownTime = 0;
+            
+            // Camera orbit drag or prolonged hold filter
+            if (dist > 5 || duration > 350) return;
             
             const rect = this.renderer.domElement.getBoundingClientRect();
-            const mouse = new THREE.Vector2(
-                ((e.clientX - rect.left) / rect.width) * 2 - 1,
-                -((e.clientY - rect.top) / rect.height) * 2 + 1
-            );
-            const raycaster = new THREE.Raycaster();
-            raycaster.setFromCamera(mouse, this.camera);
+            this.mouseVec.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            this.mouseVec.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
             
-            const interactables = [...this.wallMeshes];
+            this.raycaster.setFromCamera(this.mouseVec, this.camera);
+            
+            // Build comprehensive interactables list
+            const interactables = [];
+            
+            // 1. All placed furniture groups
+            if (this.furnitureMeshes && this.furnitureMeshes.size > 0) {
+                this.furnitureMeshes.forEach((group) => {
+                    if (group && group.visible !== false) {
+                        interactables.push(group);
+                    }
+                });
+            }
+            
+            // 2. Wall meshes
+            if (this.wallMeshes && this.wallMeshes.length > 0) {
+                interactables.push(...this.wallMeshes);
+            }
+            
+            // 3. Ceiling & pitches
             if (this.ceilingMesh) interactables.push(this.ceilingMesh);
             if (this.pitchCheekMeshes && this.pitchCheekMeshes.length > 0) interactables.push(...this.pitchCheekMeshes);
             if (this.flatCeilingMesh) interactables.push(this.flatCeilingMesh);
             
-            const hits = raycaster.intersectObjects(interactables, true);
-            if (hits.length > 0) {
-                let obj = hits[0].object;
-                while (obj && !obj.userData.wallName && !obj.userData.surfaceTarget && obj.parent) {
-                    obj = obj.parent;
-                }
-                if (obj) {
-                    const target = obj.userData.wallName || obj.userData.surfaceTarget;
-                    if (target) {
-                        selectSurfaceTarget(target);
+            // 4. Floor plane (for empty floor click detection)
+            if (this.floorMesh) interactables.push(this.floorMesh);
+            
+            const hits = this.raycaster.intersectObjects(interactables, true);
+            
+            // Empty space / sky click -> Deselect
+            if (!hits || hits.length === 0) {
+                selectItem(null, null);
+                return;
+            }
+            
+            const hitObj = hits[0].object;
+            
+            // Direct floor click (not on a rug or furniture) -> Deselect
+            if (hitObj === this.floorMesh) {
+                selectItem(null, null);
+                return;
+            }
+            
+            // Recursive scene graph traversal to identify root entity
+            let current = hitObj;
+            let hitFurniture = null;
+            let surfaceTarget = null;
+            
+            while (current && current !== this.scene) {
+                if (current.userData) {
+                    if (current.userData.furniture) {
+                        hitFurniture = current.userData.furniture;
+                        break;
+                    }
+                    if (current.userData.wallName || current.userData.surfaceTarget) {
+                        surfaceTarget = current.userData.wallName || current.userData.surfaceTarget;
+                        break;
                     }
                 }
+                current = current.parent;
+            }
+            
+            if (hitFurniture) {
+                selectItem(hitFurniture, 'furniture');
+            } else if (surfaceTarget) {
+                selectItem(null, null); // Deselect active furniture when selecting a wall
+                selectSurfaceTarget(surfaceTarget);
+            } else {
+                selectItem(null, null);
             }
         });
     },
@@ -3511,9 +5207,84 @@ const Viewer3D = {
     },
     
     animate() {
-        requestAnimationFrame(() => this.animate());
+        if (typeof requestAnimationFrame !== 'undefined') {
+            requestAnimationFrame(() => this.animate());
+        }
         
-        if (this.camera && this.controls) {
+        if (this.isWalkthrough && this.camera) {
+            const moveDelta = new THREE.Vector3();
+            const speed = this.walkthroughSpeed || 3.0; // cm per frame
+
+            // In Three.js: yaw 0 looks toward -Z, so forward is (-sin(yaw), 0, -cos(yaw))
+            const fwd = new THREE.Vector3(-Math.sin(this.walkthroughYaw), 0, -Math.cos(this.walkthroughYaw));
+            const side = new THREE.Vector3(-fwd.z, 0, fwd.x);
+
+            if (this.keys['KeyW'] || this.keys['ArrowUp']) moveDelta.addScaledVector(fwd, speed);
+            if (this.keys['KeyS'] || this.keys['ArrowDown']) moveDelta.addScaledVector(fwd, -speed);
+            if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveDelta.addScaledVector(side, -speed);
+            if (this.keys['KeyD'] || this.keys['ArrowRight']) moveDelta.addScaledVector(side, speed);
+
+            // Turning via ArrowLeft / ArrowRight or Q / E
+            const turnSpeed = 0.03;
+            if (this.keys['KeyQ']) {
+                this.walkthroughYaw += turnSpeed;
+                this.updateCameraRotation();
+            }
+            if (this.keys['KeyE']) {
+                this.walkthroughYaw -= turnSpeed;
+                this.updateCameraRotation();
+            }
+
+            if (moveDelta.lengthSq() > 0) {
+                if (typeof this.camera.position.add === 'function') {
+                    const oldX = this.camera.position.x;
+                    const oldY = this.camera.position.y;
+                    const oldZ = this.camera.position.z;
+                    this.camera.position.add(moveDelta);
+                    if (this.camera.position.x === oldX && moveDelta.x !== 0) {
+                        this.camera.position.x += moveDelta.x;
+                    }
+                    if (this.camera.position.y === oldY && moveDelta.y !== 0) {
+                        this.camera.position.y += moveDelta.y;
+                    }
+                    if (this.camera.position.z === oldZ && moveDelta.z !== 0) {
+                        this.camera.position.z += moveDelta.z;
+                    }
+                } else {
+                    this.camera.position.x = (this.camera.position.x || 0) + moveDelta.x;
+                    this.camera.position.y = (this.camera.position.y || 0) + moveDelta.y;
+                    this.camera.position.z = (this.camera.position.z || 0) + moveDelta.z;
+                }
+            }
+
+            // Boundary collision clamping with 25cm margin
+            const room = State.room || { width: 500, depth: 400 };
+            const margin = this.walkthroughMargin || 25;
+            const minX = -room.width / 2 + margin;
+            const maxX = room.width / 2 - margin;
+            const minZ = -room.depth / 2 + margin;
+            const maxZ = room.depth / 2 - margin;
+
+            if (maxX >= minX) {
+                this.camera.position.x = Math.max(minX, Math.min(maxX, this.camera.position.x));
+            } else {
+                this.camera.position.x = 0;
+            }
+
+            if (maxZ >= minZ) {
+                this.camera.position.z = Math.max(minZ, Math.min(maxZ, this.camera.position.z));
+            } else {
+                this.camera.position.z = 0;
+            }
+
+            this.camera.position.y = this.walkthroughHeight || 165;
+            this.updateCameraRotation();
+
+            // Real-time synchronization: redraw 2D radar cone
+            if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+                Editor2D.draw();
+            }
+        } else if (this.camera && this.controls) {
             const moveDelta = new THREE.Vector3();
             const speed = 2.8; // cm pro Frame - angenehm und feinfühlig steuerbar
             
@@ -3614,12 +5385,28 @@ const Viewer3D = {
         
         // 6. Build Installations
         this.updateInstallations3D();
+        
+        // 7. Build Ceiling Lamps
+        this.rebuildCeilingLamps();
     },
     
     clearScene() {
         if (this.flatCeilingMesh) {
             this.scene.remove(this.flatCeilingMesh);
             this.flatCeilingMesh = null;
+        }
+        if (this.ceilingLampMeshes) {
+            this.ceilingLampMeshes.forEach(mesh => {
+                if (mesh.userData && mesh.userData.pointLight && mesh.userData.pointLight.shadow && mesh.userData.pointLight.shadow.map) {
+                    mesh.userData.pointLight.shadow.map.dispose();
+                }
+                this.scene.remove(mesh);
+            });
+            this.ceilingLampMeshes = [];
+        }
+        if (this.ceilingLampLights) {
+            this.ceilingLampLights.forEach(light => this.scene.remove(light));
+            this.ceilingLampLights = [];
         }
         // Clear all arrays
         this.wallMeshes.forEach(mesh => this.scene.remove(mesh));
@@ -3677,15 +5464,18 @@ const Viewer3D = {
             const floorDef = floorInfo.def;
             const floorTex = floorInfo.map;
             const floorNormal = floorInfo.normalMap;
+            const floorBump = floorInfo.bumpMap;
             
             // Texturskalierung anwenden (defaultScale in cm * userScale)
             const userScale = Math.max(0.3, Math.min(3.0, room.floorScale || 1.0));
             const tileSize = (floorDef.defaultScale || 160) * userScale;
             
             // Aspektverhältnis des Texturbildes berücksichtigen für unverzerrte, natürliche Dielenproportionen
-            let aspect = 1.79;
+            let aspect = 1.0;
             if (floorTex && floorTex.image && floorTex.image.width && floorTex.image.height) {
                 aspect = floorTex.image.width / floorTex.image.height;
+            } else if (floorDef.file) {
+                aspect = 1.79;
             }
             const tileSizeX = tileSize;
             const tileSizeY = tileSize / aspect;
@@ -3693,15 +5483,18 @@ const Viewer3D = {
             const repX = Math.max(0.2, room.width / tileSizeX);
             const repY = Math.max(0.2, room.depth / tileSizeY);
             
-            floorTex.repeat.set(repX, repY);
-            if (floorNormal) floorNormal.repeat.set(repX, repY);
+            if (floorTex && floorTex.repeat) floorTex.repeat.set(repX, repY);
+            if (floorNormal && floorNormal.repeat) floorNormal.repeat.set(repX, repY);
+            if (floorBump && floorBump.repeat) floorBump.repeat.set(repX, repY);
             
             floorMat = new THREE.MeshStandardMaterial({
                 map: floorTex,
                 normalMap: floorNormal || null,
                 normalScale: floorNormal ? new THREE.Vector2(0.8, 0.8) : null,
+                bumpMap: floorBump || null,
+                bumpScale: floorBump ? (floorDef.bumpScale !== undefined ? floorDef.bumpScale : 0.04) : 0,
                 roughness: floorDef.roughness !== undefined ? floorDef.roughness : 0.85,
-                metalness: 0.0
+                metalness: floorDef.metalness !== undefined ? floorDef.metalness : 0.0
             });
         } else {
             floorMat = new THREE.MeshStandardMaterial({
@@ -3873,10 +5666,26 @@ const Viewer3D = {
             if (isTextureMode) {
                 const wallColors = State.room.wallColors || {};
                 const hexColor = wallColors[spec.name] || '#f0eee9';
+                
+                const plasterBump = TextureCache.getWallPlasterBump();
+                let wallBump = null;
+                if (plasterBump) {
+                    wallBump = plasterBump.clone();
+                    if (wallBump.repeat) {
+                        wallBump.repeat.set(
+                            Math.max(1, Math.round(spec.length / 50)),
+                            Math.max(1, Math.round(State.room.height / 50))
+                        );
+                    }
+                    wallBump.needsUpdate = true;
+                }
+                
                 wallMat = new THREE.MeshStandardMaterial({
                     color: hexColor,
                     roughness: 0.92,
                     metalness: 0.02,
+                    bumpMap: wallBump,
+                    bumpScale: wallBump ? 0.003 : 0,
                     transparent: false,
                     opacity: 1.0,
                     side: THREE.DoubleSide
@@ -3926,6 +5735,53 @@ const Viewer3D = {
         // 7. Build Vertical Triangular Cheek Walls (Wangen / Stirnwände) for partial slants
         this.buildPitchCheekMeshes3D();
     },
+
+    buildDoorHandle3D(leafW, leafThick, isLeft) {
+        const handleGroup = new THREE.Group();
+        
+        const metalMat = new THREE.MeshStandardMaterial({
+            color: 0xd4d4d8,
+            metalness: 0.88,
+            roughness: 0.22
+        });
+        
+        const rosetteGeo = new THREE.BoxGeometry(3.2, 16, 0.4);
+        const spindleGeo = new THREE.CylinderGeometry(0.7, 0.7, 4.0, 10);
+        const leverGeo = new THREE.BoxGeometry(11, 1.8, 1.2);
+        const keyholeGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.45, 8);
+        const keyholeMat = new THREE.MeshBasicMaterial({ color: 0x18181b });
+        
+        const leverDir = isLeft ? -1 : 1;
+        
+        [-1, 1].forEach(side => {
+            const sideGroup = new THREE.Group();
+            
+            const rosette = new THREE.Mesh(rosetteGeo, metalMat);
+            rosette.position.set(0, 0, side * (leafThick / 2 + 0.2));
+            rosette.castShadow = true;
+            sideGroup.add(rosette);
+            
+            const spindle = new THREE.Mesh(spindleGeo, metalMat);
+            spindle.rotation.x = Math.PI / 2;
+            spindle.position.set(0, 2.5, side * (leafThick / 2 + 2.0));
+            spindle.castShadow = true;
+            sideGroup.add(spindle);
+            
+            const lever = new THREE.Mesh(leverGeo, metalMat);
+            lever.position.set(leverDir * 4.5, 2.5, side * (leafThick / 2 + 4.0));
+            lever.castShadow = true;
+            sideGroup.add(lever);
+            
+            const keyhole = new THREE.Mesh(keyholeGeo, keyholeMat);
+            keyhole.rotation.x = Math.PI / 2;
+            keyhole.position.set(0, -3.5, side * (leafThick / 2 + 0.2));
+            sideGroup.add(keyhole);
+            
+            handleGroup.add(sideGroup);
+        });
+        
+        return handleGroup;
+    },
     
     createDoorMesh3D(spec, door) {
         const offset = this.roomOffset;
@@ -3938,80 +5794,107 @@ const Viewer3D = {
         const isLeft = hinge === 'left';
         const isIn = dir === 'in';
         
-        // Pivot rotation point for opening door
-        const pivot = new THREE.Group();
-        const pivotX = isLeft ? -door.w / 2 + 2 : door.w / 2 - 2;
-        pivot.position.set(pivotX, 2, 0);
+        const casingW = 4.5;
+        const casingD = 12; // Wall is 10cm, casing protrudes 1cm inside & outside
+        const casingColor = door.frameColor || 0x475569;
+        const casingMat = new THREE.MeshStandardMaterial({ color: casingColor, roughness: 0.5, metalness: 0.05 });
         
-        const leafW = door.w - 4;
-        const leafH = door.h - 4;
+        // 1. Umfassungszarge (3-sided casing)
+        // Left jamb
+        const jambGeo = new THREE.BoxGeometry(casingW, door.h, casingD);
+        const jambL = new THREE.Mesh(jambGeo, casingMat);
+        jambL.position.set(-door.w / 2 + casingW / 2, door.h / 2, 0);
+        jambL.castShadow = true;
+        jambL.receiveShadow = true;
+        doorGroup.add(jambL);
+        
+        // Right jamb
+        const jambR = new THREE.Mesh(jambGeo, casingMat);
+        jambR.position.set(door.w / 2 - casingW / 2, door.h / 2, 0);
+        jambR.castShadow = true;
+        jambR.receiveShadow = true;
+        doorGroup.add(jambR);
+        
+        // Top lintel
+        const lintelGeo = new THREE.BoxGeometry(door.w + 2, casingW, casingD);
+        const lintel = new THREE.Mesh(lintelGeo, casingMat);
+        lintel.position.set(0, door.h - casingW / 2, 0);
+        lintel.castShadow = true;
+        lintel.receiveShadow = true;
+        doorGroup.add(lintel);
+        
+        // Pivot point for opening door leaf
+        const pivot = new THREE.Group();
+        const pivotX = isLeft ? -door.w / 2 + casingW - 0.5 : door.w / 2 - casingW + 0.5;
+        pivot.position.set(pivotX, 1, 0);
+        
+        const leafW = door.w - casingW * 2 + 2;
+        const leafH = door.h - casingW - 1;
+        const leafThick = 4.0;
         
         if (door.isBalcony) {
             // Balcony Door (Glass with frame)
             const frameColor = door.color3d || door.color || '#ffffff';
-            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
+            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.4 });
             const glassMat = new THREE.MeshPhysicalMaterial({
-                color: 0xe2e8f0, // light glass color
+                color: 0xf8fafc,
                 transparent: true,
-                opacity: 0.25,
-                roughness: 0.1,
-                transmission: 0.95,
+                opacity: 0.3,
+                roughness: 0.05,
+                metalness: 0.1,
+                transmission: 0.92,
+                ior: 1.52,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.05,
                 side: THREE.DoubleSide
             });
             
             const leafGroup = new THREE.Group();
             
-            // 1. Left border
-            const leftBarGeo = new THREE.BoxGeometry(6, leafH, 3);
+            const leftBarGeo = new THREE.BoxGeometry(6, leafH, leafThick);
             const leftBar = new THREE.Mesh(leftBarGeo, whiteMat);
             leftBar.position.set(-leafW / 2 + 3, leafH / 2, 0);
             leftBar.castShadow = true;
             leftBar.receiveShadow = true;
             leafGroup.add(leftBar);
             
-            // 2. Right border
-            const rightBarGeo = new THREE.BoxGeometry(6, leafH, 3);
+            const rightBarGeo = new THREE.BoxGeometry(6, leafH, leafThick);
             const rightBar = new THREE.Mesh(rightBarGeo, whiteMat);
             rightBar.position.set(leafW / 2 - 3, leafH / 2, 0);
             rightBar.castShadow = true;
             rightBar.receiveShadow = true;
             leafGroup.add(rightBar);
             
-            // 3. Top border
             const topBarW = leafW - 12;
-            const topBarGeo = new THREE.BoxGeometry(topBarW, 6, 3);
+            const topBarGeo = new THREE.BoxGeometry(topBarW, 6, leafThick);
             const topBar = new THREE.Mesh(topBarGeo, whiteMat);
             topBar.position.set(0, leafH - 3, 0);
             topBar.castShadow = true;
             topBar.receiveShadow = true;
             leafGroup.add(topBar);
             
-            // 4. Bottom board (taller)
-            const bottomBarGeo = new THREE.BoxGeometry(topBarW, 12, 3);
+            const bottomBarGeo = new THREE.BoxGeometry(topBarW, 12, leafThick);
             const bottomBar = new THREE.Mesh(bottomBarGeo, whiteMat);
             bottomBar.position.set(0, 6, 0);
             bottomBar.castShadow = true;
             bottomBar.receiveShadow = true;
             leafGroup.add(bottomBar);
             
-            // 5. Middle crossbar (optional horizontal bar)
-            const midBarGeo = new THREE.BoxGeometry(topBarW, 4, 3);
+            const midBarGeo = new THREE.BoxGeometry(topBarW, 4, leafThick);
             const midBar = new THREE.Mesh(midBarGeo, whiteMat);
             midBar.position.set(0, leafH / 2, 0);
             midBar.castShadow = true;
             midBar.receiveShadow = true;
             leafGroup.add(midBar);
             
-            // 6. Lower Glass pane
             const glassLowerH = leafH / 2 - 14;
-            const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1);
+            const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1.5);
             const glassLower = new THREE.Mesh(glassLowerGeo, glassMat);
             glassLower.position.set(0, 12 + glassLowerH / 2, 0);
             leafGroup.add(glassLower);
             
-            // 7. Upper Glass pane
             const glassUpperH = leafH / 2 - 8;
-            const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1);
+            const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1.5);
             const glassUpper = new THREE.Mesh(glassUpperGeo, glassMat);
             glassUpper.position.set(0, leafH / 2 + 2 + glassUpperH / 2, 0);
             leafGroup.add(glassUpper);
@@ -4019,34 +5902,38 @@ const Viewer3D = {
             leafGroup.position.set(isLeft ? leafW / 2 : -leafW / 2, 0, 0);
             pivot.add(leafGroup);
             
-            // Door Frame
-            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
-            const frameTop = new THREE.Mesh(frameGeo, frameMat);
-            frameTop.position.set(0, door.h - 2, 0);
-            frameTop.castShadow = true;
-            frameTop.receiveShadow = true;
-            doorGroup.add(frameTop);
+            // Add Lever Handle to Balcony Door
+            const handle = this.buildDoorHandle3D(leafW, leafThick, isLeft);
+            const handleX = isLeft ? (leafW - 7) : -(leafW - 7);
+            handle.position.set(handleX, 104, 0);
+            pivot.add(handle);
             
         } else {
-            // Standard Wooden Door
+            // Standard Wooden Door with Procedural Texture & Bump
             const leafColor = door.color3d || door.color || 'hsl(33, 40%, 35%)';
-            const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
-            const leafMat = new THREE.MeshStandardMaterial({ color: leafColor, roughness: 0.8 }); // wood
+            const doorTex = TextureGenerator.createDoorTexture(leafColor);
+            const doorBump = TextureGenerator.createDoorBump();
+            
+            const leafGeo = new THREE.BoxGeometry(leafW, leafH, leafThick);
+            const leafMat = new THREE.MeshStandardMaterial({
+                color: leafColor,
+                map: doorTex,
+                bumpMap: doorBump,
+                bumpScale: 0.02,
+                roughness: 0.45,
+                metalness: 0.02
+            });
             const leaf = new THREE.Mesh(leafGeo, leafMat);
             leaf.position.set(isLeft ? leafW / 2 : -leafW / 2, leafH / 2, 0);
             leaf.castShadow = true;
             leaf.receiveShadow = true;
             pivot.add(leaf);
             
-            // Door Frame (slate)
-            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
-            const frameTop = new THREE.Mesh(frameGeo, frameMat);
-            frameTop.position.set(0, door.h - 2, 0);
-            frameTop.castShadow = true;
-            frameTop.receiveShadow = true;
-            doorGroup.add(frameTop);
+            // Add 3D Metallic Lever Handle Assembly
+            const handle = this.buildDoorHandle3D(leafW, leafThick, isLeft);
+            const handleX = isLeft ? (leafW - 7) : -(leafW - 7);
+            handle.position.set(handleX, 104, 0);
+            pivot.add(handle);
         }
         
         doorGroup.add(pivot);
@@ -4060,13 +5947,12 @@ const Viewer3D = {
         }
         
         let dx = 0, dz = 0;
-        const halfThick = 10 / 2; // wall thickness is 10
+        const halfThick = 10 / 2;
         if (spec.name === 'top') dz = -halfThick;
         else if (spec.name === 'bottom') dz = halfThick;
         else if (spec.name === 'left') dx = -halfThick;
         else if (spec.name === 'right') dx = halfThick;
 
-        // Position door group
         doorGroup.position.set(coords.x + offset.x + dx, 0, coords.y + offset.z + dz);
         doorGroup.rotation.y = -spec.angle;
         
@@ -4083,132 +5969,161 @@ const Viewer3D = {
         const dir = door.direction || 'in';
         const isIn = dir === 'in';
         
-        const leafW = door.w / 2 - 2;
-        const leafH = door.h - 4;
+        const casingW = 4.5;
+        const casingD = 12; // Wall is 10cm, casing protrudes 1cm inside & outside
+        const casingColor = door.frameColor || 0x475569;
+        const casingMat = new THREE.MeshStandardMaterial({ color: casingColor, roughness: 0.5, metalness: 0.05 });
+        
+        // 1. Umfassungszarge (3-sided casing)
+        const jambGeo = new THREE.BoxGeometry(casingW, door.h, casingD);
+        const jambL = new THREE.Mesh(jambGeo, casingMat);
+        jambL.position.set(-door.w / 2 + casingW / 2, door.h / 2, 0);
+        jambL.castShadow = true;
+        jambL.receiveShadow = true;
+        doorGroup.add(jambL);
+        
+        const jambR = new THREE.Mesh(jambGeo, casingMat);
+        jambR.position.set(door.w / 2 - casingW / 2, door.h / 2, 0);
+        jambR.castShadow = true;
+        jambR.receiveShadow = true;
+        doorGroup.add(jambR);
+        
+        const lintelGeo = new THREE.BoxGeometry(door.w + 2, casingW, casingD);
+        const lintel = new THREE.Mesh(lintelGeo, casingMat);
+        lintel.position.set(0, door.h - casingW / 2, 0);
+        lintel.castShadow = true;
+        lintel.receiveShadow = true;
+        doorGroup.add(lintel);
+        
+        const innerW = door.w - casingW * 2 + 2;
+        const wingW = innerW / 2;
+        const leafH = door.h - casingW - 1;
+        const leafThick = 4.0;
         
         let pivotL = new THREE.Group();
-        pivotL.position.set(-door.w / 2 + 2, 2, 0);
+        pivotL.position.set(-door.w / 2 + casingW - 0.5, 1, 0);
         
         let pivotR = new THREE.Group();
-        pivotR.position.set(door.w / 2 - 2, 2, 0);
+        pivotR.position.set(door.w / 2 - casingW + 0.5, 1, 0);
         
         if (door.isBalcony) {
             // Double Balcony Door (Glass with frame)
             const frameColor = door.color3d || door.color || '#ffffff';
-            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
+            const whiteMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.4 });
             const glassMat = new THREE.MeshPhysicalMaterial({
-                color: 0xe2e8f0, // light glass color
+                color: 0xf8fafc,
                 transparent: true,
-                opacity: 0.25,
-                roughness: 0.1,
-                transmission: 0.95,
+                opacity: 0.3,
+                roughness: 0.05,
+                metalness: 0.1,
+                transmission: 0.92,
+                ior: 1.52,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.05,
                 side: THREE.DoubleSide
             });
             
-            const buildBalconyLeaf = (w, h) => {
+            const buildBalconyLeaf = (w, h, isLeftWing) => {
                 const leafGroup = new THREE.Group();
                 
-                // 1. Left border
-                const leftBarGeo = new THREE.BoxGeometry(4, h, 3);
+                const leftBarGeo = new THREE.BoxGeometry(5, h, leafThick);
                 const leftBar = new THREE.Mesh(leftBarGeo, whiteMat);
-                leftBar.position.set(-w / 2 + 2, h / 2, 0);
+                leftBar.position.set(-w / 2 + 2.5, h / 2, 0);
                 leftBar.castShadow = true;
                 leftBar.receiveShadow = true;
                 leafGroup.add(leftBar);
                 
-                // 2. Right border
-                const rightBarGeo = new THREE.BoxGeometry(4, h, 3);
+                const rightBarGeo = new THREE.BoxGeometry(5, h, leafThick);
                 const rightBar = new THREE.Mesh(rightBarGeo, whiteMat);
-                rightBar.position.set(w / 2 - 2, h / 2, 0);
+                rightBar.position.set(w / 2 - 2.5, h / 2, 0);
                 rightBar.castShadow = true;
                 rightBar.receiveShadow = true;
                 leafGroup.add(rightBar);
                 
-                // 3. Top border
-                const topBarW = w - 8;
-                const topBarGeo = new THREE.BoxGeometry(topBarW, 4, 3);
+                const topBarW = w - 10;
+                const topBarGeo = new THREE.BoxGeometry(topBarW, 5, leafThick);
                 const topBar = new THREE.Mesh(topBarGeo, whiteMat);
-                topBar.position.set(0, h - 2, 0);
+                topBar.position.set(0, h - 2.5, 0);
                 topBar.castShadow = true;
                 topBar.receiveShadow = true;
                 leafGroup.add(topBar);
                 
-                // 4. Bottom board (taller)
-                const bottomBarGeo = new THREE.BoxGeometry(topBarW, 8, 3);
+                const bottomBarGeo = new THREE.BoxGeometry(topBarW, 10, leafThick);
                 const bottomBar = new THREE.Mesh(bottomBarGeo, whiteMat);
-                bottomBar.position.set(0, 4, 0);
+                bottomBar.position.set(0, 5, 0);
                 bottomBar.castShadow = true;
                 bottomBar.receiveShadow = true;
                 leafGroup.add(bottomBar);
                 
-                // 5. Middle crossbar
-                const midBarGeo = new THREE.BoxGeometry(topBarW, 3, 3);
+                const midBarGeo = new THREE.BoxGeometry(topBarW, 4, leafThick);
                 const midBar = new THREE.Mesh(midBarGeo, whiteMat);
                 midBar.position.set(0, h / 2, 0);
                 midBar.castShadow = true;
                 midBar.receiveShadow = true;
                 leafGroup.add(midBar);
                 
-                // 6. Upper Glass pane
-                const glassUpperH = h / 2 - 5;
-                const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1);
-                const glassUpper = new THREE.Mesh(glassUpperGeo, glassMat);
-                glassUpper.position.set(0, h / 2 + 1.5 + glassUpperH / 2, 0);
-                leafGroup.add(glassUpper);
-                
-                // 7. Lower Glass pane
-                const glassLowerH = h / 2 - 7;
-                const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1);
+                const glassLowerH = h / 2 - 12;
+                const glassLowerGeo = new THREE.BoxGeometry(topBarW - 0.5, glassLowerH, 1.5);
                 const glassLower = new THREE.Mesh(glassLowerGeo, glassMat);
-                glassLower.position.set(0, 4 + glassLowerH / 2, 0);
+                glassLower.position.set(0, 10 + glassLowerH / 2, 0);
                 leafGroup.add(glassLower);
+                
+                const glassUpperH = h / 2 - 7;
+                const glassUpperGeo = new THREE.BoxGeometry(topBarW - 0.5, glassUpperH, 1.5);
+                const glassUpper = new THREE.Mesh(glassUpperGeo, glassMat);
+                glassUpper.position.set(0, h / 2 + 2 + glassUpperH / 2, 0);
+                leafGroup.add(glassUpper);
                 
                 return leafGroup;
             };
             
-            const leafLGroup = buildBalconyLeaf(leafW, leafH);
-            leafLGroup.position.set(leafW / 2, 0, 0);
+            const leafLGroup = buildBalconyLeaf(wingW, leafH, true);
+            leafLGroup.position.set(wingW / 2, 0, 0);
             pivotL.add(leafLGroup);
+            const handleL = this.buildDoorHandle3D(wingW, leafThick, true);
+            handleL.position.set(wingW - 6, 104, 0);
+            pivotL.add(handleL);
             
-            const leafRGroup = buildBalconyLeaf(leafW, leafH);
-            leafRGroup.position.set(-leafW / 2, 0, 0);
+            const leafRGroup = buildBalconyLeaf(wingW, leafH, false);
+            leafRGroup.position.set(-wingW / 2, 0, 0);
             pivotR.add(leafRGroup);
-            
-            // Door Frame (white top beam)
-            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: frameColor, roughness: 0.5 });
-            const frameTop = new THREE.Mesh(frameGeo, frameMat);
-            frameTop.position.set(0, door.h - 2, 0);
-            frameTop.castShadow = true;
-            frameTop.receiveShadow = true;
-            doorGroup.add(frameTop);
+            const handleR = this.buildDoorHandle3D(wingW, leafThick, false);
+            handleR.position.set(-(wingW - 6), 104, 0);
+            pivotR.add(handleR);
             
         } else {
-            // Standard Wooden Double Door
+            // Standard Wooden Double Door with Procedural Texture & Bump
             const leafColor = door.color3d || door.color || 'hsl(33, 40%, 35%)';
-            const leafGeo = new THREE.BoxGeometry(leafW, leafH, 3);
-            const leafMat = new THREE.MeshStandardMaterial({ color: leafColor, roughness: 0.8 }); // wood
+            const doorTex = TextureGenerator.createDoorTexture(leafColor);
+            const doorBump = TextureGenerator.createDoorBump();
+            
+            const leafGeo = new THREE.BoxGeometry(wingW, leafH, leafThick);
+            const leafMat = new THREE.MeshStandardMaterial({
+                color: leafColor,
+                map: doorTex,
+                bumpMap: doorBump,
+                bumpScale: 0.02,
+                roughness: 0.45,
+                metalness: 0.02
+            });
             
             const leafL = new THREE.Mesh(leafGeo, leafMat);
-            leafL.position.set(leafW / 2, leafH / 2, 0);
+            leafL.position.set(wingW / 2, leafH / 2, 0);
             leafL.castShadow = true;
             leafL.receiveShadow = true;
             pivotL.add(leafL);
+            const handleL = this.buildDoorHandle3D(wingW, leafThick, true);
+            handleL.position.set(wingW - 6, 104, 0);
+            pivotL.add(handleL);
             
             const leafR = new THREE.Mesh(leafGeo, leafMat);
-            leafR.position.set(-leafW / 2, leafH / 2, 0);
+            leafR.position.set(-wingW / 2, leafH / 2, 0);
             leafR.castShadow = true;
             leafR.receiveShadow = true;
             pivotR.add(leafR);
-            
-            // Door Frame (slate top beam)
-            const frameGeo = new THREE.BoxGeometry(door.w, 4, 10);
-            const frameMat = new THREE.MeshStandardMaterial({ color: 0x475569 }); // slate-600
-            const frameTop = new THREE.Mesh(frameGeo, frameMat);
-            frameTop.position.set(0, door.h - 2, 0);
-            frameTop.castShadow = true;
-            frameTop.receiveShadow = true;
-            doorGroup.add(frameTop);
+            const handleR = this.buildDoorHandle3D(wingW, leafThick, false);
+            handleR.position.set(-(wingW - 6), 104, 0);
+            pivotR.add(handleR);
         }
         
         // Rotate both open by 45 degrees
@@ -4220,13 +6135,12 @@ const Viewer3D = {
         doorGroup.add(pivotR);
         
         let dx = 0, dz = 0;
-        const halfThick = 10 / 2; // wall thickness is 10
+        const halfThick = 10 / 2;
         if (spec.name === 'top') dz = -halfThick;
         else if (spec.name === 'bottom') dz = halfThick;
         else if (spec.name === 'left') dx = -halfThick;
         else if (spec.name === 'right') dx = halfThick;
 
-        // Position door group
         doorGroup.position.set(coords.x + offset.x + dx, 0, coords.y + offset.z + dz);
         doorGroup.rotation.y = -spec.angle;
         
@@ -4242,40 +6156,120 @@ const Viewer3D = {
         
         const winGroup = new THREE.Group();
         
-        // Glass pane (translucent blue box)
-        const glassGeo = new THREE.BoxGeometry(win.w - 4, win.h - 4, 2);
-        const glassMat = new THREE.MeshPhysicalMaterial({
-            color: 0x38bdf8, // light-blue
-            transparent: true,
-            opacity: 0.4,
-            roughness: 0.1,
-            transmission: 0.9
-        });
-        const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.set(0, midH, 0);
+        // 1. Dual Window Sills (Innen- und Außenfensterbank)
+        // Interior Sill: marble/stone projecting 7cm into room (z > 0)
+        const intSillGeo = new THREE.BoxGeometry(win.w + 6, 2.5, 13);
+        const intSillMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.25, metalness: 0.02 });
+        const intSill = new THREE.Mesh(intSillGeo, intSillMat);
+        intSill.position.set(0, bot - 1.25, 5.5);
+        intSill.castShadow = true;
+        intSill.receiveShadow = true;
+        winGroup.add(intSill);
         
-        // Window Frame (white outline box)
-        const frameMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.9 });
+        // Exterior Sill: anodized aluminum ledge projecting 5cm outside (z < 0)
+        const extSillGeo = new THREE.BoxGeometry(win.w + 2, 1.5, 10);
+        const extSillMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.45, metalness: 0.7 });
+        const extSill = new THREE.Mesh(extSillGeo, extSillMat);
+        extSill.position.set(0, bot - 2.0, -5.0);
+        extSill.castShadow = true;
+        winGroup.add(extSill);
         
-        // Top and Bottom frame
-        const hFrameGeo = new THREE.BoxGeometry(win.w, 3, 10);
+        // 2. Window Frame (Blendrahmen)
+        const frameMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.35, metalness: 0.05 });
+        const frameW = 4.5;
+        const frameD = 8.0;
+        
+        // Top and Bottom frame rails
+        const hFrameGeo = new THREE.BoxGeometry(win.w - frameW * 2, frameW, frameD);
         const frameTop = new THREE.Mesh(hFrameGeo, frameMat);
-        frameTop.position.set(0, bot + win.h - 1.5, 0);
+        frameTop.position.set(0, bot + win.h - frameW / 2, 0);
         const frameBot = new THREE.Mesh(hFrameGeo, frameMat);
-        frameBot.position.set(0, bot + 1.5, 0);
+        frameBot.position.set(0, bot + frameW / 2, 0);
         
-        // Sides frame
-        const vFrameGeo = new THREE.BoxGeometry(3, win.h, 10);
+        // Side jambs
+        const vFrameGeo = new THREE.BoxGeometry(frameW, win.h, frameD);
         const frameLeft = new THREE.Mesh(vFrameGeo, frameMat);
-        frameLeft.position.set(-win.w / 2 + 1.5, midH, 0);
+        frameLeft.position.set(-win.w / 2 + frameW / 2, midH, 0);
         const frameRight = new THREE.Mesh(vFrameGeo, frameMat);
-        frameRight.position.set(win.w / 2 - 1.5, midH, 0);
+        frameRight.position.set(win.w / 2 - frameW / 2, midH, 0);
         
-        winGroup.add(glass);
-        winGroup.add(frameTop);
-        winGroup.add(frameBot);
-        winGroup.add(frameLeft);
-        winGroup.add(frameRight);
+        frameTop.castShadow = true; frameBot.castShadow = true;
+        frameLeft.castShadow = true; frameRight.castShadow = true;
+        winGroup.add(frameTop); winGroup.add(frameBot);
+        winGroup.add(frameLeft); winGroup.add(frameRight);
+        
+        // 3. Physically-Based Optical Glass
+        const glassMat = new THREE.MeshPhysicalMaterial({
+            color: 0xf8fafc,
+            transparent: true,
+            opacity: 0.35,
+            roughness: 0.05,
+            metalness: 0.1,
+            transmission: 0.92,
+            ior: 1.52,
+            reflectivity: 0.5,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.05,
+            side: THREE.DoubleSide
+        });
+        
+        const isDoubleWing = win.w >= 100;
+        if (isDoubleWing) {
+            // Central mullion (Pfosten)
+            const mullionGeo = new THREE.BoxGeometry(4.0, win.h - frameW * 2, frameD - 0.5);
+            const mullion = new THREE.Mesh(mullionGeo, frameMat);
+            mullion.position.set(0, midH, 0);
+            mullion.castShadow = true;
+            winGroup.add(mullion);
+            
+            // Left & Right Glass Panes
+            const wingW = (win.w - frameW * 2 - 4.0) / 2;
+            const glassGeo = new THREE.BoxGeometry(wingW - 1.0, win.h - frameW * 2 - 1.0, 1.5);
+            
+            const glassL = new THREE.Mesh(glassGeo, glassMat);
+            glassL.position.set(-wingW / 2 - 2.0, midH, 0);
+            const glassR = new THREE.Mesh(glassGeo, glassMat);
+            glassR.position.set(wingW / 2 + 2.0, midH, 0);
+            
+            winGroup.add(glassL);
+            winGroup.add(glassR);
+        } else {
+            // Single Glass Pane
+            const glassGeo = new THREE.BoxGeometry(win.w - frameW * 2 - 1.0, win.h - frameW * 2 - 1.0, 1.5);
+            const glass = new THREE.Mesh(glassGeo, glassMat);
+            glass.position.set(0, midH, 0);
+            winGroup.add(glass);
+        }
+        
+        // 4. Metallic Window Handle (Fensterolive)
+        const handleGroup = new THREE.Group();
+        const metalMat = new THREE.MeshStandardMaterial({
+            color: 0xd4d4d8,
+            metalness: 0.88,
+            roughness: 0.22
+        });
+        
+        const rosetteGeo = new THREE.BoxGeometry(2.4, 6.0, 0.4);
+        const rosette = new THREE.Mesh(rosetteGeo, metalMat);
+        rosette.position.set(0, 0, 4.2);
+        handleGroup.add(rosette);
+        
+        const neckGeo = new THREE.CylinderGeometry(0.6, 0.6, 2.5, 8);
+        const neck = new THREE.Mesh(neckGeo, metalMat);
+        neck.rotation.x = Math.PI / 2;
+        neck.position.set(0, 0.8, 5.5);
+        handleGroup.add(neck);
+        
+        const gripGeo = new THREE.BoxGeometry(1.4, 10.0, 1.0);
+        const grip = new THREE.Mesh(gripGeo, metalMat);
+        grip.position.set(0, -4.0, 6.8); // Points downward (closed window position)
+        grip.castShadow = true;
+        handleGroup.add(grip);
+        
+        const handleX = isDoubleWing ? -3.5 : (win.w / 2 - 3.5);
+        const handleY = bot + win.h * 0.45;
+        handleGroup.position.set(handleX, handleY, 0);
+        winGroup.add(handleGroup);
         
         let dx = 0, dz = 0;
         const halfThick = 10 / 2;
@@ -4479,6 +6473,19 @@ const Viewer3D = {
         const pitchColor = (State.room.wallColors && State.room.wallColors.pitch) || (State.room.wallColors && State.room.wallColors.top) || (isTextureMode ? '#f0eee9' : 0x334155);
         const ceilingColor = (State.room.wallColors && State.room.wallColors.ceiling) || (isTextureMode ? '#f5f4f0' : 0x334155);
         
+        const plasterBump = TextureCache.getWallPlasterBump();
+        let pitchBump = null;
+        if (isTextureMode && plasterBump) {
+            pitchBump = plasterBump.clone();
+            if (pitchBump.repeat) {
+                pitchBump.repeat.set(
+                    Math.max(1, Math.round(room.width / 50)),
+                    Math.max(1, Math.round(room.depth / 50))
+                );
+            }
+            pitchBump.needsUpdate = true;
+        }
+
         // Roof pitch material
         const wallMat = new THREE.MeshStandardMaterial({
             color: isTextureMode ? pitchColor : 0x334155,
@@ -4486,6 +6493,8 @@ const Viewer3D = {
             opacity: 1.0,
             roughness: 0.88,
             metalness: 0.0,
+            bumpMap: pitchBump,
+            bumpScale: pitchBump ? 0.003 : 0,
             side: THREE.DoubleSide,
             alphaMap: alphaMap,
             alphaTest: 0.5,
@@ -4562,10 +6571,23 @@ const Viewer3D = {
             
             if (flatW > 0.5 && flatD > 0.5) {
                 const flatCeilingGeo = new THREE.PlaneGeometry(flatW, flatD);
+                let flatCeilBump = null;
+                if (plasterBump) {
+                    flatCeilBump = plasterBump.clone();
+                    if (flatCeilBump.repeat) {
+                        flatCeilBump.repeat.set(
+                            Math.max(1, Math.round(flatW / 50)),
+                            Math.max(1, Math.round(flatD / 50))
+                        );
+                    }
+                    flatCeilBump.needsUpdate = true;
+                }
                 const flatCeilingMat = new THREE.MeshStandardMaterial({
                     color: ceilingColor,
                     roughness: 0.92,
                     metalness: 0.0,
+                    bumpMap: flatCeilBump,
+                    bumpScale: flatCeilBump ? 0.003 : 0,
                     side: THREE.DoubleSide
                 });
                 this.flatCeilingMesh = new THREE.Mesh(flatCeilingGeo, flatCeilingMat);
@@ -4590,10 +6612,20 @@ const Viewer3D = {
         const isTextureMode = State.settings.viewStyle3D === 'texture';
         const cheekColor = (State.room.wallColors && State.room.wallColors.pitch) || (State.room.wallColors && State.room.wallColors.top) || (isTextureMode ? '#f0eee9' : 0x334155);
 
+        const plasterBump = TextureCache.getWallPlasterBump();
+        let cheekBump = null;
+        if (isTextureMode && plasterBump) {
+            cheekBump = plasterBump.clone();
+            if (cheekBump.repeat) cheekBump.repeat.set(4, 4);
+            cheekBump.needsUpdate = true;
+        }
+
         const cheekMat = new THREE.MeshStandardMaterial({
             color: isTextureMode ? cheekColor : 0x334155,
             roughness: 0.88,
             metalness: 0.0,
+            bumpMap: cheekBump,
+            bumpScale: cheekBump ? 0.003 : 0,
             side: THREE.DoubleSide,
             polygonOffset: true,
             polygonOffsetFactor: 1,
@@ -4682,10 +6714,178 @@ const Viewer3D = {
             }
         });
     },
+
+    createCeilingLuminaire(lampPos, ceilingHeight, isLit, intensityFactor) {
+        const group = new THREE.Group();
+        group.name = 'ceilingLamp';
+
+        // Keep ceiling lamp at least 185 cm above floor
+        const minFloorClearance = 185;
+        const maxDrop = Math.max(15, ceilingHeight - minFloorClearance);
+        const drop = Math.min(45, maxDrop);
+        const cableLength = Math.max(5, drop - 16);
+
+        // 1. Baldachin (Ceiling Canopy)
+        const canopyGeo = new THREE.CylinderGeometry(6, 6, 3, 16);
+        const canopyMat = new THREE.MeshStandardMaterial({
+            color: 0x22262e,
+            roughness: 0.4,
+            metalness: 0.6
+        });
+        const canopy = new THREE.Mesh(canopyGeo, canopyMat);
+        canopy.position.y = -1.5;
+        group.add(canopy);
+
+        // 2. Cable / Rod
+        const cableGeo = new THREE.CylinderGeometry(0.7, 0.7, cableLength, 8);
+        const cableMat = new THREE.MeshStandardMaterial({
+            color: 0x111317,
+            roughness: 0.5,
+            metalness: 0.2
+        });
+        const cable = new THREE.Mesh(cableGeo, cableMat);
+        cable.position.y = -3 - cableLength / 2;
+        group.add(cable);
+
+        // 3. Shade Top Collar
+        const collarGeo = new THREE.CylinderGeometry(4, 5, 2, 16);
+        const shadeMat = new THREE.MeshStandardMaterial({
+            color: 0x2d3748,
+            roughness: 0.35,
+            metalness: 0.5
+        });
+        const collar = new THREE.Mesh(collarGeo, shadeMat);
+        collar.position.y = -3 - cableLength - 1;
+        group.add(collar);
+
+        // 4. Conical Shade (open bottom)
+        const shadeGeo = new THREE.CylinderGeometry(5, 18, 12, 24, 1, true);
+        const shadeMesh = new THREE.Mesh(shadeGeo, shadeMat);
+        shadeMesh.position.y = -3 - cableLength - 2 - 6;
+        group.add(shadeMesh);
+
+        // 5. Diffuser Bulb (emissive glow)
+        const bulbGeo = (typeof THREE.SphereGeometry !== 'undefined')
+            ? new THREE.SphereGeometry(6, 16, 12)
+            : new THREE.CylinderGeometry(6, 6, 6, 12);
+        const bulbMat = new THREE.MeshStandardMaterial({
+            color: 0xffeedd,
+            emissive: 0xfff4e0,
+            emissiveIntensity: isLit ? (0.85 * intensityFactor) : 0.0,
+            roughness: 0.2,
+            metalness: 0.0
+        });
+        const bulbMesh = new THREE.Mesh(bulbGeo, bulbMat);
+        bulbMesh.position.y = -3 - cableLength - 8;
+        group.add(bulbMesh);
+
+        // 6. THREE.PointLight
+        const lightColor = State.settings.ceilingLampColor ? parseInt(State.settings.ceilingLampColor.replace('#', '0x'), 16) : 0xffeedd;
+        const baseIntensity = 25000;
+        const pointLight = new THREE.PointLight(
+            lightColor,
+            isLit ? (baseIntensity * intensityFactor) : 0,
+            800,
+            2
+        );
+        pointLight.position.y = -3 - cableLength - 8;
+        pointLight.castShadow = true;
+        if (pointLight.shadow) {
+            if (pointLight.shadow.mapSize) {
+                pointLight.shadow.mapSize.width = 1024;
+                pointLight.shadow.mapSize.height = 1024;
+            }
+            if (pointLight.shadow.camera) {
+                pointLight.shadow.camera.near = 10;
+                pointLight.shadow.camera.far = 1500;
+            }
+            pointLight.shadow.bias = -0.001;
+        }
+        group.add(pointLight);
+
+        group.userData = {
+            bulbMesh,
+            pointLight,
+            bulbMat
+        };
+
+        const worldX = lampPos.x + this.roomOffset.x;
+        const worldZ = lampPos.y + this.roomOffset.z;
+        group.position.set(worldX, ceilingHeight, worldZ);
+
+        return group;
+    },
+
+    rebuildCeilingLamps() {
+        if (!this.scene) return;
+
+        if (this.ceilingLampMeshes) {
+            this.ceilingLampMeshes.forEach(mesh => {
+                if (mesh.userData && mesh.userData.pointLight && mesh.userData.pointLight.shadow && mesh.userData.pointLight.shadow.map) {
+                    mesh.userData.pointLight.shadow.map.dispose();
+                }
+                this.scene.remove(mesh);
+            });
+        }
+        this.ceilingLampMeshes = [];
+        this.ceilingLampLights = [];
+
+        const lampPositions = getCeilingLampPositions(State.room);
+        const isLit = State.settings.ceilingLampsEnabled !== false;
+        const intensityFactor = State.settings.ceilingLampIntensity !== undefined ? State.settings.ceilingLampIntensity : 1.0;
+        const lampCount = lampPositions.length;
+        const perLampScale = 1.0 / Math.sqrt(lampCount);
+
+        lampPositions.forEach((pos, idx) => {
+            const ceilH = getCeilingHeightAt(pos.x, pos.y);
+            const lampGroup = this.createCeilingLuminaire(pos, ceilH, isLit, intensityFactor * perLampScale);
+            if (lampGroup.userData && lampGroup.userData.pointLight) {
+                lampGroup.userData.pointLight.castShadow = (idx < 2) && isLit;
+                this.ceilingLampLights.push(lampGroup.userData.pointLight);
+            }
+            this.scene.add(lampGroup);
+            this.ceilingLampMeshes.push(lampGroup);
+        });
+    },
+
+    updateCeilingLampsLight() {
+        if (!this.ceilingLampMeshes) return;
+        const isLit = State.settings.ceilingLampsEnabled !== false;
+        const intensityFactor = State.settings.ceilingLampIntensity !== undefined ? State.settings.ceilingLampIntensity : 1.0;
+        const lampCount = this.ceilingLampMeshes.length || 1;
+        const perLampScale = 1.0 / Math.sqrt(lampCount);
+        const baseIntensity = 25000;
+        const lightColor = State.settings.ceilingLampColor ? parseInt(State.settings.ceilingLampColor.replace('#', '0x'), 16) : 0xffeedd;
+
+        this.ceilingLampMeshes.forEach((mesh, idx) => {
+            if (mesh.userData) {
+                if (mesh.userData.bulbMat) {
+                    mesh.userData.bulbMat.emissiveIntensity = isLit ? (0.85 * intensityFactor) : 0.0;
+                }
+                if (mesh.userData.pointLight) {
+                    mesh.userData.pointLight.visible = isLit;
+                    mesh.userData.pointLight.intensity = isLit ? (baseIntensity * intensityFactor * perLampScale) : 0.0;
+                    if (mesh.userData.pointLight.color && mesh.userData.pointLight.color.setHex) {
+                        mesh.userData.pointLight.color.setHex(lightColor);
+                    }
+                    mesh.userData.pointLight.castShadow = (idx < 2) && isLit;
+                }
+            }
+        });
+
+        if (this.renderer && this.scene && this.camera) {
+            this.renderer.render(this.scene, this.camera);
+        }
+    },
     
-        buildDetailedFurniture(f, group, isColliding) {
+    buildDetailedFurniture(f, group, isColliding) {
+        group.userData = group.userData || {};
+        group.userData.furniture = f;
+        group.userData.furnitureId = f.id;
+
         const isObstacle = f.isObstacle || false;
         const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
+        const pKey = f.presetKey || f.preset || '';
         
         // Default materials
         const woodColor = f.color3d || f.color || 'hsl(33, 40%, 35%)';
@@ -4730,6 +6930,8 @@ const Viewer3D = {
             roughness: 0.1,
             metalness: 0.9
         });
+        
+        const primaryMat = woodMat;
         
         const getMat = (defaultMat) => {
             if (isColliding) {
@@ -4818,7 +7020,681 @@ const Viewer3D = {
             mesh.receiveShadow = true;
             group.add(mesh);
             
-        } else if (nameLower.includes('tv') || nameLower.includes('fernseher') || (f.tvSize !== null && f.tvSize !== undefined)) {
+        } else if (nameLower.includes('bogenleuchte') || nameLower.includes('arc') || f.isLamp || pKey === 'arc-lamp') {
+            // =========================================================================
+            // 5. ARC FLOOR LAMP (Bogenleuchte)
+            // =========================================================================
+            const baseR = Math.min(f.w * 0.42, 19);
+            const baseH = 5;
+            const baseY = -f.l / 2 + baseR + 2;
+            const shadeR = Math.min(f.w * 0.4, 18);
+            const shadeY = f.l / 2 - shadeR - 2;
+
+            // 1. Heavy Marble Base
+            const baseGeo = new THREE.CylinderGeometry(baseR, baseR + 0.5, baseH, 32);
+            const marbleMat = new THREE.MeshStandardMaterial({
+                color: 0xf1f5f9,
+                roughness: 0.25,
+                metalness: 0.1
+            });
+            const baseMesh = new THREE.Mesh(baseGeo, getMat(marbleMat));
+            baseMesh.position.set(0, baseH / 2, baseY);
+            baseMesh.castShadow = true;
+            baseMesh.receiveShadow = true;
+            group.add(baseMesh);
+
+            // Collar / Stem Socket
+            const collarGeo = new THREE.CylinderGeometry(2.5, 3.0, 6, 16);
+            const collarMesh = new THREE.Mesh(collarGeo, getMat(metalMat));
+            collarMesh.position.set(0, baseH + 3, baseY);
+            collarMesh.castShadow = true;
+            group.add(collarMesh);
+
+            // 2. Sweeping Metal Arc Neck (Tubular spline or segmented curve)
+            const chromeMat = new THREE.MeshStandardMaterial({
+                color: 0xe2e8f0,
+                metalness: 0.9,
+                roughness: 0.15
+            });
+
+            const arcPoints = [
+                new THREE.Vector3(0, baseH + 5, baseY),
+                new THREE.Vector3(0, f.h * 0.65, baseY),
+                new THREE.Vector3(0, f.h, baseY + (shadeY - baseY) * 0.35),
+                new THREE.Vector3(0, f.h * 0.96, shadeY - 10),
+                new THREE.Vector3(0, f.h * 0.82, shadeY)
+            ];
+
+            if (typeof THREE.CatmullRomCurve3 === 'function' && typeof THREE.TubeGeometry === 'function') {
+                const arcCurve = new THREE.CatmullRomCurve3(arcPoints);
+                const tubeGeo = new THREE.TubeGeometry(arcCurve, 40, 1.2, 12, false);
+                const arcMesh = new THREE.Mesh(tubeGeo, getMat(chromeMat));
+                arcMesh.castShadow = true;
+                group.add(arcMesh);
+            } else {
+                const neckGeo = new THREE.CylinderGeometry(1.2, 1.2, f.h * 0.8, 12);
+                const neckMesh = new THREE.Mesh(neckGeo, getMat(chromeMat));
+                neckMesh.position.set(0, f.h * 0.4, baseY);
+                neckMesh.castShadow = true;
+                group.add(neckMesh);
+            }
+
+            // 3. Shade Socket
+            const mountGeo = new THREE.CylinderGeometry(2.5, 3.5, 4, 16);
+            const mountMesh = new THREE.Mesh(mountGeo, getMat(metalMat));
+            mountMesh.position.set(0, f.h * 0.82 + 2, shadeY);
+            mountMesh.castShadow = true;
+            group.add(mountMesh);
+
+            // 4. Hemispherical Dome Shade (open downward towards floor)
+            const domeGeo = typeof THREE.SphereGeometry === 'function'
+                ? new THREE.SphereGeometry(shadeR, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2)
+                : new THREE.CylinderGeometry(shadeR, shadeR * 0.6, shadeR, 24);
+            const domeMat = new THREE.MeshStandardMaterial({
+                color: 0x334155,
+                metalness: 0.85,
+                roughness: 0.2,
+                side: THREE.DoubleSide || 2
+            });
+            const domeMesh = new THREE.Mesh(domeGeo, getMat(domeMat));
+            domeMesh.rotation.x = Math.PI;
+            domeMesh.position.set(0, f.h * 0.82, shadeY);
+            domeMesh.castShadow = true;
+            group.add(domeMesh);
+
+            // 5. Internal Warm Bulb
+            const isLit = State.settings.ceilingLampsEnabled !== false;
+            const bulbGeo = typeof THREE.SphereGeometry === 'function'
+                ? new THREE.SphereGeometry(3.5, 16, 16)
+                : new THREE.CylinderGeometry(3.5, 3.5, 3.5, 8);
+            const bulbMat = new THREE.MeshStandardMaterial({
+                color: 0xfff8ee,
+                emissive: 0xffaa44,
+                emissiveIntensity: isLit ? 0.9 : 0.0,
+                roughness: 0.2
+            });
+            const bulbMesh = new THREE.Mesh(bulbGeo, getMat(bulbMat));
+            bulbMesh.position.set(0, f.h * 0.82 - shadeR * 0.4, shadeY);
+            group.add(bulbMesh);
+
+            // 6. Child THREE.PointLight
+            const lightColor = f.lightColor || 0xffeedd;
+            const lightIntensity = (f.lightIntensity !== undefined ? f.lightIntensity : 10000) * (isLit ? 1 : 0);
+            const lightDist = f.lightDistance || 450;
+            const lampLight = new THREE.PointLight(lightColor, lightIntensity, lightDist, 2);
+            lampLight.position.set(0, f.h * 0.82 - shadeR * 0.6, shadeY);
+            lampLight.castShadow = true;
+            if (lampLight.shadow) {
+                lampLight.shadow.mapSize.width = 512;
+                lampLight.shadow.mapSize.height = 512;
+                lampLight.shadow.camera.near = 5;
+                lampLight.shadow.camera.far = 500;
+                lampLight.shadow.bias = -0.002;
+            }
+            group.add(lampLight);
+
+            group.userData.isFloorLamp = true;
+            group.userData.lampLight = lampLight;
+            group.userData.bulbMat = bulbMat;
+
+        } else if (nameLower.includes('pflanze') || nameLower.includes('plant') || f.isPlant || pKey === 'plant') {
+            // =========================================================================
+            // 6. POTTED INDOOR PLANT (Zimmerpflanze)
+            // =========================================================================
+            const potTopR = 17;
+            const potBottomR = 12;
+            const potH = 34;
+            const soilY = 32;
+
+            // 1. Ceramic Pot
+            const potGeo = new THREE.CylinderGeometry(potTopR, potBottomR, potH, 24);
+            const ceramicMat = new THREE.MeshStandardMaterial({
+                color: 0xf1f3f5,
+                roughness: 0.35,
+                metalness: 0.05
+            });
+            const potMesh = new THREE.Mesh(potGeo, getMat(ceramicMat));
+            potMesh.position.y = potH / 2;
+            potMesh.castShadow = true;
+            potMesh.receiveShadow = true;
+            group.add(potMesh);
+
+            // Rim Collar
+            const rimGeo = new THREE.CylinderGeometry(potTopR + 0.8, potTopR, 2, 24);
+            const rimMesh = new THREE.Mesh(rimGeo, getMat(ceramicMat));
+            rimMesh.position.y = potH;
+            rimMesh.castShadow = true;
+            group.add(rimMesh);
+
+            // 2. Potting Soil
+            const soilGeo = new THREE.CylinderGeometry(potTopR - 0.5, potTopR - 1.5, 3, 24);
+            const soilMat = new THREE.MeshStandardMaterial({
+                color: 0x241810,
+                roughness: 0.95,
+                metalness: 0.0
+            });
+            const soilMesh = new THREE.Mesh(soilGeo, getMat(soilMat));
+            soilMesh.position.y = soilY;
+            soilMesh.receiveShadow = true;
+            group.add(soilMesh);
+
+            // 3. Stems & Leaves branching outward at golden angle
+            const leafMat1 = new THREE.MeshStandardMaterial({
+                color: 0x2d6a4f,
+                roughness: 0.55,
+                metalness: 0.05,
+                side: THREE.DoubleSide || 2
+            });
+            const leafMat2 = new THREE.MeshStandardMaterial({
+                color: 0x40916c,
+                roughness: 0.5,
+                metalness: 0.05,
+                side: THREE.DoubleSide || 2
+            });
+            const stemMat = new THREE.MeshStandardMaterial({
+                color: 0x2d4a22,
+                roughness: 0.7,
+                metalness: 0.1
+            });
+
+            let baseLeafGeo = null;
+            if (typeof THREE.Shape === 'function' && typeof THREE.ShapeGeometry === 'function') {
+                const leafShape = new THREE.Shape();
+                leafShape.moveTo(0, 0);
+                leafShape.bezierCurveTo(7, 8, 13, 22, 0, 38);
+                leafShape.bezierCurveTo(-13, 22, -7, 8, 0, 0);
+
+                baseLeafGeo = new THREE.ShapeGeometry(leafShape, 12);
+                if (baseLeafGeo.attributes && baseLeafGeo.attributes.position) {
+                    const posAttr = baseLeafGeo.attributes.position;
+                    for (let j = 0; j < posAttr.count; j++) {
+                        const lx = posAttr.getX(j);
+                        const ly = posAttr.getY(j);
+                        const zArch = -Math.pow(lx / 6, 2) * 1.2 - Math.sin((ly / 38) * Math.PI) * 4.0;
+                        posAttr.setZ(j, zArch);
+                    }
+                    if (baseLeafGeo.computeVertexNormals) baseLeafGeo.computeVertexNormals();
+                }
+            }
+
+            const leafCount = 8;
+            const goldenAngle = 2.39996;
+
+            for (let i = 0; i < leafCount; i++) {
+                const fraction = (i + 1) / leafCount;
+                const azimuth = i * goldenAngle;
+                const tilt = 0.45 + (1 - fraction) * 0.35;
+                const stemLen = 25 + fraction * 35;
+
+                const stemGeo = new THREE.CylinderGeometry(0.8, 1.3, stemLen, 8);
+                const stemMesh = new THREE.Mesh(stemGeo, getMat(stemMat));
+
+                const stemGroup = new THREE.Group();
+                stemGroup.position.set(0, soilY + 1, 0);
+                stemGroup.rotation.y = azimuth;
+
+                stemMesh.position.set(0, stemLen / 2, 0);
+                stemMesh.rotation.x = tilt * 0.5;
+                stemMesh.castShadow = true;
+                stemGroup.add(stemMesh);
+
+                const leafGeoInstance = baseLeafGeo || new THREE.BoxGeometry(16, 2, 32);
+                const leafMesh = new THREE.Mesh(leafGeoInstance, getMat(i % 2 === 0 ? leafMat1 : leafMat2));
+                const scale = 0.8 + fraction * 0.4;
+                leafMesh.scale.set(scale, scale, scale);
+
+                const tipY = stemLen * Math.cos(tilt * 0.5);
+                const tipZ = stemLen * Math.sin(tilt * 0.5);
+                leafMesh.position.set(0, tipY, tipZ);
+                leafMesh.rotation.x = tilt + 0.3;
+                leafMesh.castShadow = true;
+                leafMesh.receiveShadow = true;
+                stemGroup.add(leafMesh);
+
+                group.add(stemGroup);
+            }
+
+        } else if (nameLower.includes('nachttisch') || nameLower.includes('nightstand') || f.isNightstand || pKey === 'nightstand') {
+            // =========================================================================
+            // 7. MINIMALIST NIGHTSTAND (Nachttisch)
+            // =========================================================================
+            const legH = 24;
+            const bodyH = f.h - legH; // 28 cm
+
+            // 1. Cabinet Box
+            const boxGeo = new THREE.BoxGeometry(f.w, bodyH, f.l);
+            const boxMesh = new THREE.Mesh(boxGeo, getMat(woodMat));
+            boxMesh.position.set(0, legH + bodyH / 2, 0);
+            boxMesh.castShadow = true;
+            boxMesh.receiveShadow = true;
+            group.add(boxMesh);
+
+            // 2. Drawer Front & Shadow Gap
+            const gapGeo = new THREE.BoxGeometry(f.w - 1, 0.8, 0.5);
+            const gapMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
+            const gapMesh = new THREE.Mesh(gapGeo, getMat(gapMat));
+            gapMesh.position.set(0, legH + bodyH * 0.5, f.l / 2 + 0.3);
+            group.add(gapMesh);
+
+            const drawerH = (bodyH - 3) / 2;
+            const drawerGeo = new THREE.BoxGeometry(f.w - 2, drawerH, 1.2);
+            const drawerMesh = new THREE.Mesh(drawerGeo, getMat(woodMat));
+            drawerMesh.position.set(0, legH + bodyH - drawerH / 2 - 1.5, f.l / 2 + 0.6);
+            drawerMesh.castShadow = true;
+            group.add(drawerMesh);
+
+            // Minimalist finger notch
+            const notchGeo = new THREE.BoxGeometry(12, 0.8, 1.5);
+            const notchMesh = new THREE.Mesh(notchGeo, getMat(gapMat));
+            notchMesh.position.set(0, legH + bodyH - drawerH - 0.5, f.l / 2 + 0.8);
+            group.add(notchMesh);
+
+            // 3. Hairpin Steel Legs
+            const legMat = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                metalness: 0.85,
+                roughness: 0.25
+            });
+            const strutRadius = 0.6;
+            const strutLen = Math.sqrt(legH * legH + 2.5 * 2.5);
+            const strutGeo = new THREE.CylinderGeometry(strutRadius, strutRadius, strutLen, 12);
+
+            const cornerOffsets = [
+                { x: -f.w / 2 + 5, z: -f.l / 2 + 5, sx: -1, sz: -1 },
+                { x: f.w / 2 - 5, z: -f.l / 2 + 5, sx: 1, sz: -1 },
+                { x: -f.w / 2 + 5, z: f.l / 2 - 5, sx: -1, sz: 1 },
+                { x: f.w / 2 - 5, z: f.l / 2 - 5, sx: 1, sz: 1 }
+            ];
+
+            cornerOffsets.forEach(c => {
+                // Base plate
+                const plateGeo = new THREE.BoxGeometry(4, 0.4, 4);
+                const plateMesh = new THREE.Mesh(plateGeo, getMat(legMat));
+                plateMesh.position.set(c.x, legH - 0.2, c.z);
+                group.add(plateMesh);
+
+                // V-struts
+                const strut1 = new THREE.Mesh(strutGeo, getMat(legMat));
+                strut1.position.set(c.x + c.sx * 0.8, legH / 2, c.z + c.sz * 0.4);
+                strut1.rotation.z = -c.sx * 0.08;
+                strut1.rotation.x = c.sz * 0.04;
+                strut1.castShadow = true;
+                group.add(strut1);
+
+                const strut2 = new THREE.Mesh(strutGeo, getMat(legMat));
+                strut2.position.set(c.x + c.sx * 0.4, legH / 2, c.z + c.sz * 0.8);
+                strut2.rotation.z = -c.sx * 0.04;
+                strut2.rotation.x = c.sz * 0.08;
+                strut2.castShadow = true;
+                group.add(strut2);
+
+                // Rubber foot pad
+                const footGeo = typeof THREE.SphereGeometry === 'function'
+                    ? new THREE.SphereGeometry(1.0, 8, 8)
+                    : new THREE.CylinderGeometry(1.0, 1.0, 1.0, 8);
+                const footMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
+                const footMesh = new THREE.Mesh(footGeo, getMat(footMat));
+                footMesh.position.set(c.x + c.sx * 1.5, 0.8, c.z + c.sz * 1.5);
+                group.add(footMesh);
+            });
+
+            // 4. Staged Bedside Book
+            const bookW = 16, bookH = 2.2, bookL = 22;
+            const bookCoverGeo = new THREE.BoxGeometry(bookW, bookH, bookL);
+            const bookCoverMat = new THREE.MeshStandardMaterial({
+                color: 0x3b82f6,
+                roughness: 0.6
+            });
+            const bookCoverMesh = new THREE.Mesh(bookCoverGeo, getMat(bookCoverMat));
+            bookCoverMesh.position.set(-f.w * 0.15, f.h + bookH / 2, 0);
+            bookCoverMesh.rotation.y = -0.15;
+            bookCoverMesh.castShadow = true;
+            bookCoverMesh.receiveShadow = true;
+            group.add(bookCoverMesh);
+
+            const pageGeo = new THREE.BoxGeometry(bookW - 0.6, bookH - 0.4, bookL - 0.6);
+            const pageMesh = new THREE.Mesh(pageGeo, getMat(whiteMat));
+            pageMesh.position.set(-f.w * 0.15 + 0.3, f.h + bookH / 2, 0);
+            pageMesh.rotation.y = -0.15;
+            group.add(pageMesh);
+
+        } else if (nameLower.includes('lounge') || pKey === 'lounge-chair') {
+            // =========================================================================
+            // 1. MINIMALIST LOUNGE CHAIR (Lounge-Sessel)
+            // =========================================================================
+            const legMat = new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                roughness: 0.35,
+                metalness: 0.85
+            });
+            const legGeo = new THREE.CylinderGeometry(0.9, 1.2, 22, 12);
+            const legAngles = [
+                { x: -(f.w / 2 - 8), z: -(f.l / 2 - 10), tiltX: -0.06, tiltZ: -0.06 },
+                { x: +(f.w / 2 - 8), z: -(f.l / 2 - 10), tiltX: -0.06, tiltZ: +0.06 },
+                { x: -(f.w / 2 - 8), z: +(f.l / 2 - 10), tiltX: +0.06, tiltZ: -0.06 },
+                { x: +(f.w / 2 - 8), z: +(f.l / 2 - 10), tiltX: +0.06, tiltZ: +0.06 }
+            ];
+            legAngles.forEach(la => {
+                const legMesh = new THREE.Mesh(legGeo, getMat(legMat));
+                legMesh.position.set(la.x, 11, la.z);
+                legMesh.rotation.x = la.tiltX;
+                legMesh.rotation.z = la.tiltZ;
+                legMesh.castShadow = true;
+                group.add(legMesh);
+            });
+
+            // Leg stretchers
+            const stretcherGeo = new THREE.CylinderGeometry(0.8, 0.8, f.l - 24, 8);
+            const strLeft = new THREE.Mesh(stretcherGeo, getMat(legMat));
+            strLeft.position.set(-(f.w / 2 - 8), 10, 0);
+            strLeft.rotation.x = Math.PI / 2;
+            group.add(strLeft);
+
+            const strRight = new THREE.Mesh(stretcherGeo, getMat(legMat));
+            strRight.position.set(+(f.w / 2 - 8), 10, 0);
+            strRight.rotation.x = Math.PI / 2;
+            group.add(strRight);
+
+            // Sub-chassis plate
+            const chassisGeo = new THREE.BoxGeometry(f.w - 8, 2.5, f.l - 12);
+            const chassisMesh = new THREE.Mesh(chassisGeo, getMat(legMat));
+            chassisMesh.position.set(0, 22 + 1.25, 0);
+            chassisMesh.rotation.x = -0.05;
+            chassisMesh.castShadow = true;
+            group.add(chassisMesh);
+
+            // Plush bouclé seat cushion
+            const cushionGeo = new THREE.BoxGeometry(f.w - 14, 14, f.l - 20);
+            const cushionMesh = new THREE.Mesh(cushionGeo, getMat(fabricMat));
+            cushionMesh.position.set(0, 24 + 7, 2);
+            cushionMesh.rotation.x = -0.05;
+            cushionMesh.castShadow = true;
+            cushionMesh.receiveShadow = true;
+            group.add(cushionMesh);
+
+            // Ergonomic backrest pillow
+            const backGeo = new THREE.BoxGeometry(f.w - 14, 46, 12);
+            const backMesh = new THREE.Mesh(backGeo, getMat(fabricMat));
+            backMesh.position.set(0, 28 + 23, -f.l / 2 + 16);
+            backMesh.rotation.x = -0.22;
+            backMesh.castShadow = true;
+            backMesh.receiveShadow = true;
+            group.add(backMesh);
+
+            // Walnut arm pads on metal upright posts
+            const armPadGeo = new THREE.BoxGeometry(5, 2.5, f.l - 18);
+            const armPostGeo = new THREE.CylinderGeometry(0.8, 0.8, 20, 8);
+
+            [-1, 1].forEach(side => {
+                const armX = side * (f.w / 2 - 4);
+                [-1, 1].forEach(postPos => {
+                    const postMesh = new THREE.Mesh(armPostGeo, getMat(legMat));
+                    postMesh.position.set(armX, 22 + 10, postPos * (f.l / 4 - 4));
+                    postMesh.castShadow = true;
+                    group.add(postMesh);
+                });
+
+                const armPad = new THREE.Mesh(armPadGeo, getMat(woodMat));
+                armPad.position.set(armX, 42.5, 0);
+                armPad.castShadow = true;
+                group.add(armPad);
+            });
+
+        } else if (nameLower.includes('regal') || nameLower.includes('raumteiler') || nameLower.includes('bookshelf') || pKey === 'bookshelf') {
+            // =========================================================================
+            // 2. BOOKSHELF / ROOM DIVIDER (Regal / Raumteiler)
+            // =========================================================================
+            const cheekGeo = new THREE.BoxGeometry(3, f.h, f.l);
+            const leftCheek = new THREE.Mesh(cheekGeo, getMat(woodMat));
+            leftCheek.position.set(-(f.w / 2 - 1.5), f.h / 2, 0);
+            leftCheek.castShadow = true;
+            leftCheek.receiveShadow = true;
+            group.add(leftCheek);
+
+            const rightCheek = new THREE.Mesh(cheekGeo, getMat(woodMat));
+            rightCheek.position.set(+(f.w / 2 - 1.5), f.h / 2, 0);
+            rightCheek.castShadow = true;
+            rightCheek.receiveShadow = true;
+            group.add(rightCheek);
+
+            // Base plinth
+            const plinthGeo = new THREE.BoxGeometry(f.w - 6, 4, f.l);
+            const plinthMesh = new THREE.Mesh(plinthGeo, getMat(woodMat));
+            plinthMesh.position.set(0, 2, 0);
+            plinthMesh.castShadow = true;
+            plinthMesh.receiveShadow = true;
+            group.add(plinthMesh);
+
+            // Top crown shelf
+            const crownGeo = new THREE.BoxGeometry(f.w, 2.5, f.l);
+            const crownMesh = new THREE.Mesh(crownGeo, getMat(woodMat));
+            crownMesh.position.set(0, f.h - 1.25, 0);
+            crownMesh.castShadow = true;
+            group.add(crownMesh);
+
+            // 4 Intermediate Shelves
+            const shelfLevels = [36, 70, 104, 138];
+            const shelfGeo = new THREE.BoxGeometry(f.w - 6, 2.5, f.l - 0.5);
+            shelfLevels.forEach(yLevel => {
+                const shelf = new THREE.Mesh(shelfGeo, getMat(woodMat));
+                shelf.position.set(0, yLevel, 0);
+                shelf.castShadow = true;
+                shelf.receiveShadow = true;
+                group.add(shelf);
+            });
+
+            // Asymmetric Staggered Vertical Dividers
+            const dividers = [
+                { y: 36 + 17, h: 31.5, x: -20 },
+                { y: 70 + 17, h: 31.5, x: 25 },
+                { y: 104 + 17, h: 31.5, x: -30 },
+                { y: 138 + 10, h: 18, x: 15 }
+            ];
+            dividers.forEach(div => {
+                const divGeo = new THREE.BoxGeometry(2.5, div.h, f.l - 1);
+                const divMesh = new THREE.Mesh(divGeo, getMat(woodMat));
+                divMesh.position.set(div.x, div.y, 0);
+                divMesh.castShadow = true;
+                divMesh.receiveShadow = true;
+                group.add(divMesh);
+            });
+
+            // Staged books cluster on shelf 2 (y = 70)
+            const bookColors = [0x1e3a5f, 0xa04e38, 0x556b2f, 0xe2d9cb, 0x2c3e50];
+            const bookHeights = [22, 26, 20, 24, 25];
+            for (let b = 0; b < 5; b++) {
+                const bH = bookHeights[b];
+                const bGeo = new THREE.BoxGeometry(3.6, bH, f.l * 0.55);
+                const bMat = new THREE.MeshStandardMaterial({
+                    color: bookColors[b],
+                    roughness: 0.75,
+                    metalness: 0.05
+                });
+                const bMesh = new THREE.Mesh(bGeo, getMat(bMat));
+                bMesh.position.set(-(f.w / 2 - 10) + b * 4.4, 70 + 1.25 + bH / 2, 0);
+                bMesh.castShadow = true;
+                group.add(bMesh);
+            }
+
+            // Ceramic vase on shelf 3 (y = 104)
+            const vaseGeo = new THREE.CylinderGeometry(4.5, 3.5, 18, 24);
+            const vaseMat = new THREE.MeshStandardMaterial({
+                color: 0xede8df,
+                roughness: 0.85,
+                metalness: 0.05
+            });
+            const vaseMesh = new THREE.Mesh(vaseGeo, getMat(vaseMat));
+            vaseMesh.position.set(f.w / 2 - 18, 104 + 1.25 + 9, 0);
+            vaseMesh.castShadow = true;
+            group.add(vaseMesh);
+
+        } else if (nameLower.includes('couchtisch') || nameLower.includes('coffee-table') || pKey === 'coffee-table-set') {
+            // =========================================================================
+            // 3. MODERN COFFEE TABLE SET (Couchtisch-Set)
+            // =========================================================================
+            const tableLegMat = new THREE.MeshStandardMaterial({
+                color: 0x18181b,
+                roughness: 0.35,
+                metalness: 0.85
+            });
+
+            // Primary Table (Height 42cm, Carrara marble top)
+            const marbleMat = new THREE.MeshStandardMaterial({
+                color: 0xf1f0eb,
+                roughness: 0.25,
+                metalness: 0.08
+            });
+            const top1Geo = new THREE.CylinderGeometry(26, 26, 2.4, 36);
+            const top1Mesh = new THREE.Mesh(top1Geo, getMat(marbleMat));
+            top1Mesh.position.set(-16, 42 - 1.2, -4);
+            top1Mesh.castShadow = true;
+            top1Mesh.receiveShadow = true;
+            group.add(top1Mesh);
+
+            // 3 Tapered Tripod Legs for Table 1
+            const leg1Geo = new THREE.CylinderGeometry(1.0, 0.7, 39.6, 12);
+            for (let i = 0; i < 3; i++) {
+                const angle = (i * 2 * Math.PI) / 3;
+                const leg1 = new THREE.Mesh(leg1Geo, getMat(tableLegMat));
+                leg1.position.set(-16 + Math.cos(angle) * 18, 19.8, -4 + Math.sin(angle) * 18);
+                leg1.rotation.z = -Math.cos(angle) * 0.07;
+                leg1.rotation.x = Math.sin(angle) * 0.07;
+                leg1.castShadow = true;
+                group.add(leg1);
+            }
+
+            // Secondary Nested Table (Height 34cm, Smoked Oak top)
+            const smokedOakMat = new THREE.MeshStandardMaterial({
+                color: 0x27272a,
+                roughness: 0.6,
+                metalness: 0.1
+            });
+            const top2Geo = new THREE.CylinderGeometry(20, 20, 2.0, 36);
+            const top2Mesh = new THREE.Mesh(top2Geo, getMat(smokedOakMat));
+            top2Mesh.position.set(18, 34 - 1.0, 6);
+            top2Mesh.castShadow = true;
+            top2Mesh.receiveShadow = true;
+            group.add(top2Mesh);
+
+            // 3 Tapered Tripod Legs for Table 2
+            const leg2Geo = new THREE.CylinderGeometry(0.9, 0.6, 32.0, 12);
+            for (let i = 0; i < 3; i++) {
+                const angle = Math.PI / 3 + (i * 2 * Math.PI) / 3;
+                const leg2 = new THREE.Mesh(leg2Geo, getMat(tableLegMat));
+                leg2.position.set(18 + Math.cos(angle) * 14, 16.0, 6 + Math.sin(angle) * 14);
+                leg2.rotation.z = -Math.cos(angle) * 0.07;
+                leg2.rotation.x = Math.sin(angle) * 0.07;
+                leg2.castShadow = true;
+                group.add(leg2);
+            }
+
+            // Art monograph decor on Table 1
+            const bookGeo = new THREE.BoxGeometry(14, 0.8, 10);
+            const bookMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
+            const bookMesh = new THREE.Mesh(bookGeo, getMat(bookMat));
+            bookMesh.position.set(-16, 42 + 0.4, -4);
+            bookMesh.rotation.y = 0.2;
+            bookMesh.castShadow = true;
+            group.add(bookMesh);
+
+        } else if (nameLower.includes('lowboard') || pKey === 'tv-lowboard') {
+            // =========================================================================
+            // 4. TV LOWBOARD / MEDIA UNIT (TV-Lowboard)
+            // =========================================================================
+            // 1. Recessed dark shadow plinth
+            const plinthMat = new THREE.MeshStandardMaterial({
+                color: 0x121214,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            const plinthGeo = new THREE.BoxGeometry(f.w - 12, 6, f.l - 8);
+            const plinthMesh = new THREE.Mesh(plinthGeo, getMat(plinthMat));
+            plinthMesh.position.set(0, 3, 0);
+            plinthMesh.castShadow = true;
+            plinthMesh.receiveShadow = true;
+            group.add(plinthMesh);
+
+            // 2. Carcass Bottom & Top in Walnut
+            const carcassPanelGeo = new THREE.BoxGeometry(f.w, 2.2, f.l);
+            const bottomMesh = new THREE.Mesh(carcassPanelGeo, getMat(woodMat));
+            bottomMesh.position.set(0, 7.1, 0);
+            bottomMesh.castShadow = true;
+            bottomMesh.receiveShadow = true;
+            group.add(bottomMesh);
+
+            const topMesh = new THREE.Mesh(carcassPanelGeo, getMat(woodMat));
+            topMesh.position.set(0, 43.9, 0);
+            topMesh.castShadow = true;
+            topMesh.receiveShadow = true;
+            group.add(topMesh);
+
+            // 3. Side Cheeks
+            const cheekGeo = new THREE.BoxGeometry(2.2, 34.6, f.l);
+            const leftCheek = new THREE.Mesh(cheekGeo, getMat(woodMat));
+            leftCheek.position.set(-(f.w / 2 - 1.1), 25.5, 0);
+            leftCheek.castShadow = true;
+            leftCheek.receiveShadow = true;
+            group.add(leftCheek);
+
+            const rightCheek = new THREE.Mesh(cheekGeo, getMat(woodMat));
+            rightCheek.position.set(+(f.w / 2 - 1.1), 25.5, 0);
+            rightCheek.castShadow = true;
+            rightCheek.receiveShadow = true;
+            group.add(rightCheek);
+
+            // 4. Internal Partitions
+            const partGeo = new THREE.BoxGeometry(1.8, 34.6, f.l - 4);
+            const p1 = new THREE.Mesh(partGeo, getMat(woodMat));
+            p1.position.set(-f.w / 6, 25.5, 0);
+            p1.castShadow = true;
+            group.add(p1);
+
+            const p2 = new THREE.Mesh(partGeo, getMat(woodMat));
+            p2.position.set(+f.w / 6, 25.5, 0);
+            p2.castShadow = true;
+            group.add(p2);
+
+            // 5. Back Panel
+            const backGeo = new THREE.BoxGeometry(f.w - 4.4, 34.6, 1.2);
+            const backMesh = new THREE.Mesh(backGeo, getMat(woodMat));
+            backMesh.position.set(0, 25.5, -f.l / 2 + 0.6);
+            group.add(backMesh);
+
+            // 6. Acoustic Felt Backing (Dark Charcoal)
+            const feltMat = new THREE.MeshStandardMaterial({
+                color: 0x18181b,
+                roughness: 0.95
+            });
+            const feltGeo = new THREE.BoxGeometry(f.w - 5, 33.6, 0.8);
+            const feltMesh = new THREE.Mesh(feltGeo, getMat(feltMat));
+            feltMesh.position.set(0, 25.5, f.l / 2 - 2.0);
+            group.add(feltMesh);
+
+            // 7. 36 Acoustic Wood Slats
+            const slatCount = 36;
+            const slatGeo = new THREE.BoxGeometry(2.4, 32.6, 1.2);
+            const slatSpan = f.w - 8;
+            const slatStep = slatSpan / (slatCount - 1);
+            for (let s = 0; s < slatCount; s++) {
+                const slatX = -(slatSpan / 2) + s * slatStep;
+                const slatMesh = new THREE.Mesh(slatGeo, getMat(woodMat));
+                slatMesh.position.set(slatX, 25.5, f.l / 2 - 1.0);
+                slatMesh.castShadow = true;
+                group.add(slatMesh);
+            }
+
+            // 8. Rear Cable Grommet
+            const grommetMat = new THREE.MeshStandardMaterial({
+                color: 0x334155,
+                metalness: 0.7,
+                roughness: 0.3
+            });
+            const grommetGeo = new THREE.CylinderGeometry(2.5, 2.5, 0.4, 20);
+            const grommetMesh = new THREE.Mesh(grommetGeo, getMat(grommetMat));
+            grommetMesh.position.set(0, 45.2, -f.l / 2 + 6);
+            group.add(grommetMesh);
+
+        } else if ((f.tvSize !== null && f.tvSize !== undefined) || (!nameLower.includes('lowboard') && !nameLower.includes('sideboard') && !nameLower.includes('board') && (nameLower.includes('tv') || nameLower.includes('fernseher')))) {
             // TV / Fernseher
             const baseH = 2;
             const neckH = 8;
@@ -5179,6 +8055,12 @@ const Viewer3D = {
     updateFurniture3D(f) {
         if (!this.scene) return;
         
+        // Guard against resurrecting deleted furniture
+        if (State.furniture && !State.furniture.includes(f)) {
+            this.removeFurniture3D(f);
+            return;
+        }
+        
         let group = this.furnitureMeshes.get(f);
         
         if (!group) {
@@ -5192,17 +8074,20 @@ const Viewer3D = {
             }
         }
         
+        // Attach domain entity metadata for raycasting traversal
+        group.userData = { furniture: f, furnitureId: f.id };
+
         const isObstacle = f.isObstacle || false;
         const heightVal = isObstacle ? getCeilingHeightAt(f.x, f.y) : f.h;
         
         // Build the detailed parts
         this.buildDetailedFurniture(f, group, f.isColliding);
         
-        // Draw selected indicators in 3D
+        // Draw selected indicators in 3D (Oriented Bounding Wireframe)
         if (State.selectedItem === f) {
             let edgesGeo;
             if (f.shape === 'circle') {
-                edgesGeo = new THREE.EdgesGeometry(new THREE.CylinderGeometry(f.w/2, f.w/2, heightVal, 16));
+                edgesGeo = new THREE.EdgesGeometry(new THREE.CylinderGeometry(f.w/2, f.w/2, heightVal, 24));
             } else if (isObstacle) {
                 const rad = (f.rotation * Math.PI) / 180;
                 const cos = Math.cos(rad);
@@ -5223,13 +8108,20 @@ const Viewer3D = {
                 edgesGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(f.w + 1, heightVal + 1, f.l + 1));
             }
             
-            const line = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 }));
+            const line = new THREE.LineSegments(
+                edgesGeo,
+                new THREE.LineBasicMaterial({ color: 0x3b82f6, linewidth: 2 })
+            );
+            line.name = 'selectionIndicator';
             line.position.y = isObstacle ? 0 : heightVal / 2;
+            line.raycast = () => {}; // Never intercept raycasts
             group.add(line);
         }
         
         // Position group
-        group.position.set(f.x + this.roomOffset.x, f.elevation || 0, f.y + this.roomOffset.z);
+        const offX = (this.roomOffset && typeof this.roomOffset.x === 'number') ? this.roomOffset.x : (-State.room.width / 2);
+        const offZ = (this.roomOffset && typeof this.roomOffset.z === 'number') ? this.roomOffset.z : (-State.room.depth / 2);
+        group.position.set(f.x + offX, f.elevation || 0, f.y + offZ);
         group.rotation.y = -(f.rotation * Math.PI) / 180;
     },
     
@@ -5290,21 +8182,1041 @@ const Viewer3D = {
     }
 };
 
+// --- WALKTHROUGH MODE BRIDGE ---
+const WalkthroughMode = {
+    toggle(active) {
+        const next = active !== undefined ? !!active : !Viewer3D.isWalkthrough;
+        Viewer3D.setWalkthroughMode(next);
+        return Viewer3D.isWalkthrough;
+    },
+    getPosition() {
+        return Viewer3D.walkthroughPosition;
+    },
+    setPosition(pos) {
+        Viewer3D.walkthroughPosition = pos;
+    },
+    getAngle() {
+        return Viewer3D.walkthroughAngle;
+    },
+    setAngle(angle) {
+        Viewer3D.walkthroughAngle = angle;
+    }
+};
+
+// --- MATERIAL- & STÜCKLISTE (BOM) CALCULATOR (DIN 277 / WoFlV) ---
+const BOMCalculator = {
+    calculate(state = State) {
+        const room = state.room || { width: 500, depth: 400, height: 250, pitches: {}, wallColors: {}, floorTexture: 'laminat_hell' };
+        const elements = state.elements || [];
+        const installations = state.installations || [];
+        const furniture = state.furniture || [];
+
+        const W = room.width || 500;
+        const D = room.depth || 400;
+        const H = room.height || 250;
+
+        // 1. Geometry (DIN 277 / WoFlV)
+        const floorAreaM2 = (W * D) / 10000;
+        const perimeterM = (2 * (W + D)) / 100;
+        const grossVolumeM3 = (W * D * H) / 1000000;
+
+        // Pitch lost volume & sloped ceiling areas
+        let pitchLostVolumeM3 = 0;
+        let totalPitchSlopeAreaM2 = 0;
+        let totalPitchRunFootprintM2 = 0;
+        const pitches = room.pitches || {};
+
+        ['top', 'right', 'bottom', 'left'].forEach(side => {
+            const p = pitches[side];
+            if (p && p.enabled) {
+                const wallLen = (side === 'top' || side === 'bottom') ? W : D;
+                const run = Math.min(wallLen, Math.max(0, p.run || 150));
+                const kniestock = Math.min(H, Math.max(0, p.kniestock !== undefined ? p.kniestock : 80));
+                const slopeHeight = Math.max(0, H - kniestock);
+                
+                const lostVol = 0.5 * (run / 100) * (slopeHeight / 100) * (wallLen / 100);
+                pitchLostVolumeM3 += lostVol;
+
+                const slopeHypotenuse = Math.sqrt(run * run + slopeHeight * slopeHeight);
+                totalPitchSlopeAreaM2 += (wallLen * slopeHypotenuse) / 10000;
+                totalPitchRunFootprintM2 += (wallLen * run) / 10000;
+            }
+        });
+
+        const netVolumeM3 = Math.max(0, grossVolumeM3 - pitchLostVolumeM3);
+        const flatCeilingAreaM2 = Math.max(0, floorAreaM2 - totalPitchRunFootprintM2);
+
+        // Skylights cutouts
+        let skylightCutoutsM2 = 0;
+        elements.forEach(el => {
+            if (el.type === 'skylight') {
+                skylightCutoutsM2 += ((el.w || 80) * (el.h || 120)) / 10000;
+            }
+        });
+
+        const totalCeilingAreaM2 = Math.max(0, flatCeilingAreaM2 + totalPitchSlopeAreaM2 - skylightCutoutsM2);
+
+        // 2. Wall Surfaces
+        const walls = [
+            { key: 'top', name: 'Wand Nord (Oben)', len: W, colorKey: 'top' },
+            { key: 'right', name: 'Wand Ost (Rechts)', len: D, colorKey: 'right' },
+            { key: 'bottom', name: 'Wand Süd (Unten)', len: W, colorKey: 'bottom' },
+            { key: 'left', name: 'Wand West (Links)', len: D, colorKey: 'left' }
+        ];
+
+        let grossWallAreaTotalM2 = 0;
+        let cutoutsTotalM2 = 0;
+        let netWallAreaTotalM2 = 0;
+
+        const surfaceRows = [];
+
+        // Floor row
+        const floorTexName = (typeof TextureRegistry !== 'undefined' && TextureRegistry[room.floorTexture] && TextureRegistry[room.floorTexture].name)
+            ? TextureRegistry[room.floorTexture].name
+            : (room.floorTexture || 'Standard');
+        surfaceRows.push({
+            id: 'floor',
+            name: 'Bodenfläche',
+            type: 'floor',
+            grossM2: floorAreaM2,
+            cutoutM2: 0,
+            netM2: floorAreaM2,
+            material: floorTexName,
+            color: '#e2e8f0'
+        });
+
+        // Ceiling row
+        surfaceRows.push({
+            id: 'ceiling',
+            name: 'Deckenfläche (inkl. Schrägen)',
+            type: 'ceiling',
+            grossM2: flatCeilingAreaM2 + totalPitchSlopeAreaM2,
+            cutoutM2: skylightCutoutsM2,
+            netM2: totalCeilingAreaM2,
+            material: 'Putz / Weiß',
+            color: (room.wallColors && room.wallColors.ceiling) ? room.wallColors.ceiling : '#f5f4f0'
+        });
+
+        // Wall rows
+        walls.forEach(w => {
+            const pSelf = pitches[w.key];
+            let grossW = 0;
+
+            if (pSelf && pSelf.enabled) {
+                const kniestock = Math.min(H, Math.max(0, pSelf.kniestock !== undefined ? pSelf.kniestock : 80));
+                grossW = (w.len * kniestock) / 10000;
+            } else {
+                grossW = (w.len * H) / 10000;
+                const adj1 = (w.key === 'top' || w.key === 'bottom') ? 'left' : 'top';
+                const adj2 = (w.key === 'top' || w.key === 'bottom') ? 'right' : 'bottom';
+                [adj1, adj2].forEach(adj => {
+                    const pAdj = pitches[adj];
+                    if (pAdj && pAdj.enabled) {
+                        const run = Math.min(w.len, Math.max(0, pAdj.run || 150));
+                        const kniestock = Math.min(H, Math.max(0, pAdj.kniestock !== undefined ? pAdj.kniestock : 80));
+                        const lostTriangleM2 = (0.5 * run * (H - kniestock)) / 10000;
+                        grossW = Math.max(0, grossW - lostTriangleM2);
+                    }
+                });
+            }
+
+            let wallCutouts = 0;
+            elements.forEach(el => {
+                if (el.wall === w.key && el.type !== 'skylight') {
+                    wallCutouts += ((el.w || 0) * (el.h || 0)) / 10000;
+                }
+            });
+
+            const netW = Math.max(0, grossW - wallCutouts);
+            grossWallAreaTotalM2 += grossW;
+            cutoutsTotalM2 += wallCutouts;
+            netWallAreaTotalM2 += netW;
+
+            surfaceRows.push({
+                id: `wall_${w.key}`,
+                name: w.name,
+                type: 'wall',
+                wallKey: w.key,
+                grossM2: grossW,
+                cutoutM2: wallCutouts,
+                netM2: netW,
+                material: 'Wandfarbe',
+                color: (room.wallColors && room.wallColors[w.colorKey]) ? room.wallColors[w.colorKey] : '#f0eee9'
+            });
+        });
+
+        // 3. Openings breakdown
+        const openingNames = {
+            'door': 'Zimmertür',
+            'double-door': 'Doppeltür / Flügeltür',
+            'window': 'Fenster',
+            'skylight': 'Dachflächenfenster'
+        };
+        const wallsMap = { top: 'Nord (Oben)', right: 'Ost (Rechts)', bottom: 'Süd (Unten)', left: 'West (Links)' };
+
+        const openingsRows = elements.map((el, idx) => {
+            const cutoutArea = ((el.w || 0) * (el.h || 0)) / 10000;
+            return {
+                pos: idx + 1,
+                id: el.id,
+                type: el.type,
+                name: openingNames[el.type] || el.type,
+                wall: wallsMap[el.wall] || el.wall,
+                wallKey: el.wall,
+                widthCm: el.w,
+                heightCm: el.h,
+                positionCm: el.position,
+                sillHeightCm: el.sillHeight || 0,
+                areaM2: cutoutArea
+            };
+        });
+
+        // 4. Installations breakdown
+        const instNames = { socket: 'Steckdose', switch: 'Lichtschalter', lan: 'LAN-Dose', sat: 'SAT-Anschluss', power: 'Starkstrom' };
+        const installationsRows = installations.map((inst, idx) => ({
+            pos: idx + 1,
+            id: inst.id,
+            type: inst.type,
+            name: instNames[inst.type] || inst.type,
+            wall: wallsMap[inst.wall] || inst.wall,
+            positionCm: inst.position,
+            heightCm: inst.height || 30
+        }));
+
+        // 5. Furniture Inventory & Realistic Budget Guideline Prices (EUR)
+        const guidelinePrices = {
+            'doppelbett': 850,
+            'bett': 850,
+            'kleiderschrank': 680,
+            'schrank': 680,
+            'sofa': 1250,
+            'couchtisch': 220,
+            'couch': 1250,
+            'esstisch': 490,
+            'stuhl': 95,
+            'schreibtisch': 340,
+            'lounge-sessel': 420,
+            'sessel': 420,
+            'regal': 280,
+            'raumteiler': 280,
+            'tv-lowboard': 390,
+            'lowboard': 390,
+            'bogenleuchte': 180,
+            'lampe': 180,
+            'leuchte': 180,
+            'zimmerpflanze': 65,
+            'pflanze': 65,
+            'nachttisch': 110,
+            'teppich': 190,
+            'fernseher': 650,
+            'tv': 650
+        };
+
+        const guidelineKeys = Object.keys(guidelinePrices).sort((a, b) => b.length - a.length);
+
+        const getUnitPrice = (item) => {
+            const name = (item.name || '').toLowerCase();
+            for (const key of guidelineKeys) {
+                if (name.includes(key)) return guidelinePrices[key];
+            }
+            return 150;
+        };
+
+        const furnitureGroups = new Map();
+        furniture.forEach(f => {
+            const sig = `${f.name || 'Möbel'}|${f.w}|${f.l}|${f.h || 0}`;
+            if (!furnitureGroups.has(sig)) {
+                furnitureGroups.set(sig, {
+                    name: f.name || 'Möbel',
+                    shape: f.shape || 'rect',
+                    w: f.w,
+                    l: f.l,
+                    h: (typeof f.h === 'number') ? f.h : ((typeof f.height === 'number') ? f.height : 0),
+                    unitPrice: getUnitPrice(f),
+                    count: 0,
+                    category: f.isRug ? 'Textil' : (f.isLamp ? 'Beleuchtung' : (f.isPlant ? 'Deko' : 'Möbel'))
+                });
+            }
+            furnitureGroups.get(sig).count++;
+        });
+
+        const furnitureRows = [];
+        let totalFurnitureCost = 0;
+        let posCounter = 1;
+
+        furnitureGroups.forEach(grp => {
+            const totalCost = grp.count * grp.unitPrice;
+            totalFurnitureCost += totalCost;
+            furnitureRows.push({
+                pos: posCounter++,
+                name: grp.name,
+                category: grp.category,
+                shape: grp.shape,
+                w: grp.w,
+                l: grp.l,
+                h: grp.h,
+                count: grp.count,
+                unitPrice: grp.unitPrice,
+                totalCost: totalCost
+            });
+        });
+
+        return {
+            geometry: {
+                widthCm: W,
+                depthCm: D,
+                heightCm: H,
+                floorAreaM2: Math.round(floorAreaM2 * 100) / 100,
+                perimeterM: Math.round(perimeterM * 100) / 100,
+                grossVolumeM3: Math.round(grossVolumeM3 * 100) / 100,
+                netVolumeM3: Math.round(netVolumeM3 * 100) / 100
+            },
+            surfaces: surfaceRows.map(r => ({
+                ...r,
+                grossM2: Math.round(r.grossM2 * 100) / 100,
+                cutoutM2: Math.round(r.cutoutM2 * 100) / 100,
+                netM2: Math.round(r.netM2 * 100) / 100
+            })),
+            openings: openingsRows.map(r => ({
+                ...r,
+                areaM2: Math.round(r.areaM2 * 100) / 100
+            })),
+            installations: installationsRows,
+            furniture: furnitureRows,
+            totals: {
+                floorAreaM2: Math.round(floorAreaM2 * 100) / 100,
+                netWallAreaM2: Math.round(netWallAreaTotalM2 * 100) / 100,
+                grossWallAreaM2: Math.round(grossWallAreaTotalM2 * 100) / 100,
+                ceilingAreaM2: Math.round(totalCeilingAreaM2 * 100) / 100,
+                openingsCutoutAreaM2: Math.round(cutoutsTotalM2 * 100) / 100,
+                furnitureCount: furniture.length,
+                totalFurnitureCost: totalFurnitureCost,
+                installationsCount: installations.length,
+                openingsCount: elements.length
+            }
+        };
+    }
+};
+
+// --- HIGH-RES EXPORT & MATERIAL BOM EXPORT MANAGER ---
+const ExportManager = {
+    export2DHighResPNG() {
+        if (typeof document === 'undefined') return;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 2400;
+        canvas.height = 1800;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        // 1. Slate Background
+        ctx.fillStyle = '#0b0f19';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const H_head = 140;
+        const H_foot = 70;
+
+        // 2. Header Banner
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, canvas.width, H_head);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, H_head);
+        ctx.lineTo(canvas.width, H_head);
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 32px Inter, Outfit, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('RoomCraft', 50, 40);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '500 14px Inter, Outfit, sans-serif';
+        ctx.fillText('ARCHITEKTUR-GRUNDRISS • MASSSTABSGERECHTE AUSFÜHRUNG (DIN 277)', 50, 82);
+
+        const room = State.room;
+        const floorArea = ((room.width * room.depth) / 10000).toFixed(2);
+        const perimeter = (2 * (room.width + room.depth) / 100).toFixed(2);
+        const chips = [
+            `Raummaße: ${(room.width / 100).toFixed(2)} m × ${(room.depth / 100).toFixed(2)} m`,
+            `Höhe: ${(room.height / 100).toFixed(2)} m`,
+            `Grundfläche: ${floorArea} m²`,
+            `Umfang: ${perimeter} m`
+        ];
+
+        let chipX = canvas.width - 50;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        chips.reverse().forEach(chip => {
+            ctx.font = '600 13px Inter, sans-serif';
+            const metrics = ctx.measureText(chip);
+            const w = metrics.width + 24;
+            const h = 32;
+            const rx = chipX - w;
+            const ry = 54;
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            if (ctx.roundRect) ctx.roundRect(rx, ry, w, h, 6);
+            else ctx.rect(rx, ry, w, h);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#e2e8f0';
+            ctx.fillText(chip, chipX - 12, ry + h / 2);
+            chipX -= (w + 10);
+        });
+
+        // 3. Centered Plan Drawing Viewport
+        const marginX = 120;
+        const marginY = 90;
+        const availW = canvas.width - 2 * marginX;
+        const availH = canvas.height - H_head - H_foot - 2 * marginY;
+
+        const totalWcm = room.width + 120;
+        const totalDcm = room.depth + 120;
+        const scale = Math.min(availW / totalWcm, availH / totalDcm);
+
+        const originX = canvas.width / 2 - (room.width / 2) * scale;
+        const originY = H_head + (canvas.height - H_head - H_foot) / 2 - (room.depth / 2) * scale;
+
+        const prevSelected = State.selectedItem;
+        State.selectedItem = null;
+
+        ctx.save();
+        ctx.translate(originX, originY);
+        ctx.scale(scale, scale);
+
+        if (State.settings.gridEnabled && Editor2D.drawGrid) {
+            Editor2D.drawGrid(ctx);
+        }
+        if (Editor2D.drawRoofPitches) Editor2D.drawRoofPitches(ctx);
+        if (Editor2D.drawWalls) Editor2D.drawWalls(ctx);
+        if (Editor2D.drawWallElements) Editor2D.drawWallElements(ctx);
+        if (Editor2D.drawInstallations) Editor2D.drawInstallations(ctx);
+        if (Editor2D.drawFurniture) Editor2D.drawFurniture(ctx);
+        if (Editor2D.drawCeilingLamps) Editor2D.drawCeilingLamps(ctx);
+        if (Editor2D.drawDimensions) Editor2D.drawDimensions(ctx);
+
+        ctx.restore();
+        State.selectedItem = prevSelected;
+
+        // 4. North Compass Rose
+        const compassX = canvas.width - 90;
+        const compassY = H_head + 60;
+        ctx.save();
+        ctx.translate(compassX, compassY);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, 22, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = '#06b6d4';
+        ctx.beginPath();
+        ctx.moveTo(0, -18);
+        ctx.lineTo(6, 6);
+        ctx.lineTo(0, 2);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        ctx.moveTo(0, -18);
+        ctx.lineTo(-6, 6);
+        ctx.lineTo(0, 2);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('N', 0, -20);
+        ctx.restore();
+
+        // 5. Footer Bar with Scale Bar
+        const footY = canvas.height - H_foot;
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, footY, canvas.width, H_foot);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, footY);
+        ctx.lineTo(canvas.width, footY);
+        ctx.stroke();
+
+        const bar1m = 100 * scale;
+        const bar2m = 200 * scale;
+        const barX = 50;
+        const barY = footY + 36;
+
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(barX, barY - 4, bar1m, 4);
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(barX + bar1m, barY - 4, bar1m, 4);
+
+        ctx.font = '500 11px Inter, sans-serif';
+        ctx.fillStyle = '#94a3b8';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText('0', barX, barY + 4);
+        ctx.fillText('1m', barX + bar1m, barY + 4);
+        ctx.fillText('2m', barX + bar2m, barY + 4);
+
+        ctx.textAlign = 'left';
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText('MASSSTABSLEISTE', barX, barY - 18);
+
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '500 12px Inter, sans-serif';
+        const dateStr = new Date().toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        ctx.fillText(`Erstellt mit RoomCraft • ${dateStr} • ${State.furniture.length} Möbel • ${State.elements.length} Öffnungen`, canvas.width - 50, footY + H_foot / 2);
+
+        // 6. Download Trigger
+        const timestamp = Date.now();
+        const filename = `roomcraft-2d-floorplan-${timestamp}.png`;
+        if (canvas.toBlob) {
+            canvas.toBlob(blob => {
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast("2D High-Res Grundriss heruntergeladen!");
+            }, 'image/png');
+        } else {
+            const a = document.createElement('a');
+            a.href = canvas.toDataURL('image/png');
+            a.download = filename;
+            a.click();
+            showToast("2D High-Res Grundriss heruntergeladen!");
+        }
+    },
+
+    export3DHighResPNG() {
+        if (typeof Viewer3D === 'undefined' || !Viewer3D || !Viewer3D.renderer || !Viewer3D.scene || !Viewer3D.camera) {
+            alert("3D Ansicht ist noch nicht initialisiert!");
+            return;
+        }
+
+        const prevSelected = State.selectedItem;
+        State.selectedItem = null;
+
+        try {
+            Viewer3D.renderer.render(Viewer3D.scene, Viewer3D.camera);
+            const dom = Viewer3D.renderer.domElement;
+            const timestamp = Date.now();
+            const filename = `roomcraft-3d-${timestamp}.png`;
+
+            if (dom.toBlob) {
+                dom.toBlob(blob => {
+                    State.selectedItem = prevSelected;
+                    if (!blob) return;
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    showToast("3D Rendering erfolgreich heruntergeladen!");
+                }, 'image/png');
+            } else {
+                State.selectedItem = prevSelected;
+                const a = document.createElement('a');
+                a.href = dom.toDataURL('image/png');
+                a.download = filename;
+                a.click();
+                showToast("3D Rendering erfolgreich heruntergeladen!");
+            }
+        } catch (err) {
+            State.selectedItem = prevSelected;
+            console.error("Export 3D Error:", err);
+            alert("Fehler beim Exportieren des 3D-Renderings.");
+        }
+    },
+
+    generateCSVContent(bom) {
+        const lines = [];
+        const escape = (val) => {
+            const str = String(val === undefined || val === null ? '' : val);
+            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        };
+
+        lines.push('--- RAUM-STAMMDATEN ---');
+        lines.push(['Eigenschaft', 'Wert', 'Einheit'].map(escape).join(','));
+        lines.push(['Raumbreite', bom.geometry.widthCm, 'cm'].map(escape).join(','));
+        lines.push(['Raumlänge / Tiefe', bom.geometry.depthCm, 'cm'].map(escape).join(','));
+        lines.push(['Raumhöhe', bom.geometry.heightCm, 'cm'].map(escape).join(','));
+        lines.push(['Grundfläche (DIN 277)', bom.geometry.floorAreaM2, 'm²'].map(escape).join(','));
+        lines.push(['Umfang', bom.geometry.perimeterM, 'm'].map(escape).join(','));
+        lines.push(['Brutto-Rauminhalt', bom.geometry.grossVolumeM3, 'm³'].map(escape).join(','));
+        lines.push(['Netto-Rauminhalt', bom.geometry.netVolumeM3, 'm³'].map(escape).join(','));
+        lines.push('');
+
+        lines.push('--- FLÄCHENBERECHNUNG (DIN 277) ---');
+        lines.push(['Bereich', 'Typ', 'Brutto m²', 'Abzug m²', 'Netto m²', 'Material / Ausführung'].map(escape).join(','));
+        bom.surfaces.forEach(s => {
+            lines.push([s.name, s.type, s.grossM2, s.cutoutM2, s.netM2, s.material].map(escape).join(','));
+        });
+        lines.push(['SUMME WANDFLÄCHE (NETTO)', 'Summe', bom.totals.grossWallAreaM2, bom.totals.openingsCutoutAreaM2, bom.totals.netWallAreaM2, 'Putz / Anstrich'].map(escape).join(','));
+        lines.push('');
+
+        lines.push('--- ÖFFNUNGEN UND EINBAUTEN ---');
+        lines.push(['Pos', 'Element', 'Wand', 'Breite cm', 'Höhe cm', 'Wandposition cm', 'Brüstung cm', 'Fläche m²'].map(escape).join(','));
+        bom.openings.forEach(o => {
+            lines.push([o.pos, o.name, o.wall, o.widthCm, o.heightCm, o.positionCm, o.sillHeightCm, o.areaM2].map(escape).join(','));
+        });
+        lines.push('');
+
+        lines.push('--- ELEKTRO- & SANITÄRINSTALLATIONEN ---');
+        lines.push(['Pos', 'Installation', 'Wand', 'Wandposition cm', 'Höhe cm'].map(escape).join(','));
+        bom.installations.forEach(i => {
+            lines.push([i.pos, i.name, i.wall, i.positionCm, i.heightCm].map(escape).join(','));
+        });
+        lines.push('');
+
+        lines.push('--- MÖBEL-STÜCKLISTE & KOSTENRICHTWERTE ---');
+        lines.push(['Pos', 'Bezeichnung', 'Kategorie', 'Maße BxTxH cm', 'Menge', 'Einzelpreis EUR', 'Gesamtpreis EUR'].map(escape).join(','));
+        bom.furniture.forEach(f => {
+            const dims = `${f.w} × ${f.l} × ${f.h}`;
+            lines.push([f.pos, f.name, f.category, dims, f.count, `${f.unitPrice} €`, `${f.totalCost} €`].map(escape).join(','));
+        });
+        lines.push(['GESAMTBUDGET MÖBEL', '', '', '', bom.totals.furnitureCount, '', `${bom.totals.totalFurnitureCost} €`].map(escape).join(','));
+
+        return '\uFEFF' + lines.join('\r\n');
+    },
+
+    exportBOMCSV() {
+        const bom = BOMCalculator.calculate(State);
+        const csv = this.generateCSVContent(bom);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `roomcraft-stueckliste-${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("Material- und Stückliste (CSV) heruntergeladen!");
+    },
+
+    exportBOMJSON() {
+        const bom = BOMCalculator.calculate(State);
+        const jsonStr = JSON.stringify(bom, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `roomcraft-bom-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("BOM als JSON heruntergeladen!");
+    },
+
+    copyBOMToClipboard() {
+        const bom = BOMCalculator.calculate(State);
+        let text = `RoomCraft Material- & Stückliste (BOM)\n`;
+        text += `Raum: ${(bom.geometry.widthCm/100).toFixed(2)}m × ${(bom.geometry.depthCm/100).toFixed(2)}m • Fläche: ${bom.geometry.floorAreaM2} m² • Netto-Wand: ${bom.totals.netWallAreaM2} m²\n\n`;
+        text += `MÖBEL:\nPos\tBezeichnung\tKategorie\tMaße (BxTxH)\tMenge\tEinzelpreis\tGesamtpreis\n`;
+        bom.furniture.forEach(f => {
+            text += `${f.pos}\t${f.name}\t${f.category}\t${f.w}x${f.l}x${f.h} cm\t${f.count}\t${f.unitPrice} €\t${f.totalCost} €\n`;
+        });
+        text += `\nGesamtbudget Möbel: ${bom.totals.totalFurnitureCost} € (${bom.totals.furnitureCount} Teile)\n`;
+
+        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast("Stückliste in Zwischenablage kopiert!");
+            }).catch(() => {
+                this.fallbackCopyToClipboard(text);
+            });
+        } else {
+            this.fallbackCopyToClipboard(text);
+        }
+    },
+
+    fallbackCopyToClipboard(text) {
+        if (typeof document === 'undefined') return;
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            showToast("Stückliste in Zwischenablage kopiert!");
+        } catch (e) {
+            alert("Kopieren nicht unterstützt.");
+        }
+        document.body.removeChild(ta);
+    },
+
+    printBOM() {
+        if (typeof window !== 'undefined' && window.print) {
+            window.print();
+        }
+    }
+};
+
+// --- MATERIAL- & STÜCKLISTE (BOM) MODAL CONTROLLER ---
+const BOMDialog = {
+    modal: null,
+
+    init() {
+        if (typeof document === 'undefined') return;
+        this.modal = document.getElementById('bom-modal');
+        if (!this.modal) return;
+
+        const btnClose = document.getElementById('btn-close-bom');
+        if (btnClose) btnClose.addEventListener('click', () => this.close());
+
+        this.modal.addEventListener('click', (e) => {
+            if (this.modal.getBoundingClientRect) {
+                const rect = this.modal.getBoundingClientRect();
+                if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+                    this.close();
+                }
+            }
+        });
+
+        const tabBtns = this.modal.querySelectorAll('.bom-tab-btn');
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const targetPanelId = btn.dataset.bomTab;
+                this.modal.querySelectorAll('.bom-panel').forEach(panel => {
+                    if (panel.id === targetPanelId) panel.classList.add('active');
+                    else panel.classList.remove('active');
+                });
+            });
+        });
+
+        const btnCopy = document.getElementById('btn-bom-copy');
+        if (btnCopy) btnCopy.addEventListener('click', () => ExportManager.copyBOMToClipboard());
+
+        const btnPrint = document.getElementById('btn-bom-print');
+        if (btnPrint) btnPrint.addEventListener('click', () => ExportManager.printBOM());
+
+        const btnDownloadJson = document.getElementById('btn-bom-download-json');
+        if (btnDownloadJson) btnDownloadJson.addEventListener('click', () => ExportManager.exportBOMJSON());
+
+        const btnDownloadCsv = document.getElementById('btn-bom-download-csv');
+        if (btnDownloadCsv) btnDownloadCsv.addEventListener('click', () => ExportManager.exportBOMCSV());
+    },
+
+    open() {
+        if (!this.modal && typeof document !== 'undefined') {
+            this.modal = document.getElementById('bom-modal');
+        }
+        if (!this.modal) return;
+
+        const bom = BOMCalculator.calculate(State);
+
+        const elArea = document.getElementById('bom-kpi-area');
+        if (elArea) elArea.textContent = `${bom.geometry.floorAreaM2.toFixed(2)} m²`;
+
+        const elDims = document.getElementById('bom-kpi-dims');
+        if (elDims) elDims.textContent = `${(bom.geometry.widthCm / 100).toFixed(2)} × ${(bom.geometry.depthCm / 100).toFixed(2)} m (H: ${(bom.geometry.heightCm / 100).toFixed(2)} m)`;
+
+        const elWalls = document.getElementById('bom-kpi-walls');
+        if (elWalls) elWalls.textContent = `${bom.totals.netWallAreaM2.toFixed(2)} m²`;
+
+        const elWallCutouts = document.getElementById('bom-kpi-wall-cutouts');
+        if (elWallCutouts) elWallCutouts.textContent = `Abzüge: ${bom.totals.openingsCutoutAreaM2.toFixed(2)} m²`;
+
+        const elCeiling = document.getElementById('bom-kpi-ceiling');
+        if (elCeiling) elCeiling.textContent = `${bom.totals.ceilingAreaM2.toFixed(2)} m²`;
+
+        const elPitches = document.getElementById('bom-kpi-pitches');
+        const pitchCount = Object.values(State.room.pitches || {}).filter(p => p && p.enabled).length;
+        if (elPitches) elPitches.textContent = pitchCount > 0 ? `${pitchCount} Dachschräge(n)` : 'Keine Schrägen';
+
+        const elFurnitureCost = document.getElementById('bom-kpi-furniture-cost');
+        if (elFurnitureCost) elFurnitureCost.textContent = `${bom.totals.totalFurnitureCost.toLocaleString('de-DE')} €`;
+
+        const elFurnitureCount = document.getElementById('bom-kpi-furniture-count');
+        if (elFurnitureCount) elFurnitureCount.textContent = `${bom.totals.furnitureCount} Möbel-Objekt(e)`;
+
+        const elSummary = document.getElementById('bom-overview-summary');
+        if (elSummary) {
+            elSummary.innerHTML = `
+                <table class="bom-table">
+                    <thead>
+                        <tr><th>Parameter</th><th>Wert</th><th>Beschreibung</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Raummaße (B × T × H)</td><td>${bom.geometry.widthCm} × ${bom.geometry.depthCm} × ${bom.geometry.heightCm} cm</td><td>Lichte Innenmaße Rohbau/Putz</td></tr>
+                        <tr><td>Brutto-Grundfläche</td><td>${bom.geometry.floorAreaM2} m²</td><td>Nutzbare Bodenfläche nach DIN 277</td></tr>
+                        <tr><td>Raum-Umfang</td><td>${bom.geometry.perimeterM} m</td><td>Sockelleisten-Gesamtlänge (abzgl. Türen)</td></tr>
+                        <tr><td>Rauminhalt (Brutto)</td><td>${bom.geometry.grossVolumeM3} m³</td><td>Volumen ohne Schrägenabzug</td></tr>
+                        <tr><td>Rauminhalt (Netto)</td><td>${bom.geometry.netVolumeM3} m³</td><td>Bereinigt um Dachschrägenvolumen</td></tr>
+                        <tr><td>Netto-Wandfläche</td><td>${bom.totals.netWallAreaM2} m²</td><td>Verputz-/Anstrichfläche nach Abzug aller Öffnungen</td></tr>
+                        <tr><td>Ausstattung & Möbel</td><td>${bom.totals.furnitureCount} Objekte</td><td>Gesamtbudget Richtwert: ${bom.totals.totalFurnitureCost.toLocaleString('de-DE')} €</td></tr>
+                    </tbody>
+                </table>
+            `;
+        }
+
+        const elSurfaces = document.getElementById('bom-surfaces-table-wrap');
+        if (elSurfaces) {
+            let html = `
+                <table class="bom-table">
+                    <thead>
+                        <tr><th>Bereich</th><th>Brutto m²</th><th>Abzug Öffnungen</th><th>Netto m²</th><th>Material / Textur</th></tr>
+                    </thead>
+                    <tbody>
+            `;
+            bom.surfaces.forEach(s => {
+                html += `<tr>
+                    <td><strong>${s.name}</strong></td>
+                    <td>${s.grossM2.toFixed(2)} m²</td>
+                    <td>${s.cutoutM2 > 0 ? s.cutoutM2.toFixed(2) + ' m²' : '—'}</td>
+                    <td><strong style="color: #38bdf8;">${s.netM2.toFixed(2)} m²</strong></td>
+                    <td>${s.material}</td>
+                </tr>`;
+            });
+            html += `</tbody></table>`;
+            elSurfaces.innerHTML = html;
+        }
+
+        const elOpenings = document.getElementById('bom-openings-table-wrap');
+        if (elOpenings) {
+            if (bom.openings.length === 0) {
+                elOpenings.innerHTML = `<div style="padding: 14px; color: #94a3b8; font-size: 13px;">Keine Wandöffnungen (Türen / Fenster) im Raum vorhanden.</div>`;
+            } else {
+                let html = `
+                    <table class="bom-table">
+                        <thead>
+                            <tr><th>Pos</th><th>Element</th><th>Wand</th><th>Breite × Höhe</th><th>Position</th><th>Fläche</th></tr>
+                        </thead>
+                        <tbody>
+                `;
+                bom.openings.forEach(o => {
+                    html += `<tr>
+                        <td>${o.pos}</td>
+                        <td><strong>${o.name}</strong></td>
+                        <td>${o.wall}</td>
+                        <td>${o.widthCm} × ${o.heightCm} cm</td>
+                        <td>${o.positionCm} cm</td>
+                        <td>${o.areaM2.toFixed(2)} m²</td>
+                    </tr>`;
+                });
+                html += `</tbody></table>`;
+                elOpenings.innerHTML = html;
+            }
+        }
+
+        const elInst = document.getElementById('bom-installations-table-wrap');
+        if (elInst) {
+            if (bom.installations.length === 0) {
+                elInst.innerHTML = `<div style="padding: 14px; color: #94a3b8; font-size: 13px;">Keine Anschlüsse (Steckdosen / Schalter) platziert.</div>`;
+            } else {
+                let html = `
+                    <table class="bom-table">
+                        <thead>
+                            <tr><th>Pos</th><th>Typ</th><th>Wand</th><th>Position</th><th>Höhe ab Boden</th></tr>
+                        </thead>
+                        <tbody>
+                `;
+                bom.installations.forEach(i => {
+                    html += `<tr>
+                        <td>${i.pos}</td>
+                        <td><strong>${i.name}</strong></td>
+                        <td>${i.wall}</td>
+                        <td>${i.positionCm} cm</td>
+                        <td>${i.heightCm} cm</td>
+                    </tr>`;
+                });
+                html += `</tbody></table>`;
+                elInst.innerHTML = html;
+            }
+        }
+
+        const elFurn = document.getElementById('bom-furniture-table-wrap');
+        if (elFurn) {
+            if (bom.furniture.length === 0) {
+                elFurn.innerHTML = `<div style="padding: 14px; color: #94a3b8; font-size: 13px;">Keine Möbelstücke platziert.</div>`;
+            } else {
+                let html = `
+                    <table class="bom-table">
+                        <thead>
+                            <tr><th>Pos</th><th>Bezeichnung</th><th>Kategorie</th><th>Maße (B × T × H)</th><th>Menge</th><th>Einzelpreis</th><th>Gesamtpreis</th></tr>
+                        </thead>
+                        <tbody>
+                `;
+                bom.furniture.forEach(f => {
+                    html += `<tr>
+                        <td>${f.pos}</td>
+                        <td><strong>${f.name}</strong></td>
+                        <td><span style="font-size: 11px; padding: 2px 6px; background: rgba(255,255,255,0.06); border-radius: 4px;">${f.category}</span></td>
+                        <td>${f.w} × ${f.l} × ${f.h} cm</td>
+                        <td>${f.count}×</td>
+                        <td>${f.unitPrice.toLocaleString('de-DE')} €</td>
+                        <td><strong>${f.totalCost.toLocaleString('de-DE')} €</strong></td>
+                    </tr>`;
+                });
+                html += `
+                    <tr style="background: rgba(139, 92, 246, 0.08); font-weight: 600;">
+                        <td colspan="4">GESAMTSUMME AUSSTATTUNG</td>
+                        <td>${bom.totals.furnitureCount} Teile</td>
+                        <td>—</td>
+                        <td style="color: #a78bfa; font-size: 14px;">${bom.totals.totalFurnitureCost.toLocaleString('de-DE')} €</td>
+                    </tr>
+                </tbody></table>`;
+                elFurn.innerHTML = html;
+            }
+        }
+
+        const elStatus = document.getElementById('bom-footer-status');
+        if (elStatus) {
+            elStatus.textContent = `${bom.furniture.length} Möbelpositionen • ${bom.openings.length} Öffnungen • ${bom.installations.length} Anschlüsse`;
+        }
+
+        if (typeof lucide !== 'undefined' && lucide.createIcons) {
+            lucide.createIcons();
+        }
+
+        if (typeof this.modal.showModal === 'function') {
+            this.modal.showModal();
+        } else {
+            this.modal.setAttribute('open', '');
+        }
+    },
+
+    close() {
+        if (!this.modal) return;
+        if (typeof this.modal.close === 'function') {
+            this.modal.close();
+        } else {
+            this.modal.removeAttribute('open');
+        }
+    }
+};
+
 // --- PRESENTS & INITIAL DATA ---
 const Presets = {
-    bed: { name: 'Doppelbett', shape: 'rect', w: 180, l: 200, h: 60, color: 'hsl(215, 60%, 45%)', collisionEnabled: true },
-    wardrobe: { name: 'Kleiderschrank', shape: 'rect', w: 150, l: 60, h: 210, color: 'hsl(33, 50%, 30%)', collisionEnabled: true },
-    desk: { name: 'Schreibtisch', shape: 'rect', w: 140, l: 80, h: 76, color: 'hsl(180, 50%, 35%)', collisionEnabled: true },
-    chair: { name: 'Stuhl', shape: 'rect', w: 45, l: 45, h: 85, color: 'hsl(20, 70%, 40%)', collisionEnabled: true },
-    sofa: { name: 'Sofa', shape: 'rect', w: 210, l: 95, h: 80, color: 'hsl(263, 40%, 45%)', collisionEnabled: true },
-    table: { name: 'Esstisch', shape: 'rect', w: 160, l: 90, h: 76, color: 'hsl(35, 45%, 40%)', collisionEnabled: true },
-    'custom-rect': { name: 'Eckiges Custom', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true },
-    'round-table': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, isTable: true },
-    'custom-circle': { name: 'Rundes Custom', shape: 'circle', w: 80, l: 80, h: 80, color: 'hsl(160, 60%, 40%)', collisionEnabled: true },
-    chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true },
-    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76 },
-    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', color3d: '#334155', collisionEnabled: true, isRug: true, rugTexture: 'flach', textureScale: 1.0 },
-    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(30, 25%, 70%)', color3d: '#fefae0', collisionEnabled: true, isRug: true, rugTexture: 'hochflor', textureScale: 1.0 }
+    bed: { name: 'Doppelbett', shape: 'rect', w: 180, l: 200, h: 60, color: 'hsl(215, 60%, 45%)', collisionEnabled: true, category: 'bedroom' },
+    wardrobe: { name: 'Kleiderschrank', shape: 'rect', w: 150, l: 60, h: 210, color: 'hsl(33, 50%, 30%)', collisionEnabled: true, category: 'bedroom' },
+    desk: { name: 'Schreibtisch', shape: 'rect', w: 140, l: 80, h: 76, color: 'hsl(180, 50%, 35%)', collisionEnabled: true, category: 'office' },
+    chair: { name: 'Stuhl', shape: 'rect', w: 45, l: 45, h: 85, color: 'hsl(20, 70%, 40%)', collisionEnabled: true, category: 'dining office' },
+    sofa: { name: 'Sofa', shape: 'rect', w: 210, l: 95, h: 80, color: 'hsl(263, 40%, 45%)', collisionEnabled: true, category: 'living' },
+    table: { name: 'Esstisch', shape: 'rect', w: 160, l: 90, h: 76, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, category: 'dining' },
+    'custom-rect': { name: 'Eckiges Custom', shape: 'rect', w: 80, l: 80, h: 80, color: 'hsl(142, 60%, 40%)', collisionEnabled: true, category: 'all' },
+    'round-table': { name: 'Runder Tisch', shape: 'circle', w: 100, l: 100, h: 75, color: 'hsl(35, 45%, 40%)', collisionEnabled: true, isTable: true, category: 'dining living' },
+    'custom-circle': { name: 'Rundes Custom', shape: 'circle', w: 80, l: 80, h: 80, color: 'hsl(160, 60%, 40%)', collisionEnabled: true, category: 'all' },
+    chimney: { name: 'Schornstein / Pfeiler', shape: 'rect', w: 40, l: 40, h: 250, color: 'hsl(215, 12%, 40%)', collisionEnabled: true, isObstacle: true, category: 'all' },
+    tv: { name: 'Fernseher (TV)', shape: 'rect', w: 122, l: 15, h: 78.5, color: 'hsl(0, 0%, 15%)', collisionEnabled: true, tvSize: 55, elevation: 76, category: 'living' },
+    'rug-rect': { name: 'Teppich (eckig)', shape: 'rect', w: 200, l: 150, h: 2, color: 'hsl(215, 25%, 60%)', color3d: '#334155', collisionEnabled: true, isRug: true, rugTexture: 'flach', textureScale: 1.0, category: 'decor living' },
+    'rug-circle': { name: 'Teppich (rund)', shape: 'circle', w: 160, l: 160, h: 2, color: 'hsl(30, 25%, 70%)', color3d: '#fefae0', collisionEnabled: true, isRug: true, rugTexture: 'hochflor', textureScale: 1.0, category: 'decor living' },
+    
+    // --- 7 NEW MODERN DESIGNER FURNITURE PRESETS (Milestone 3 / Requirement R3) ---
+    'lounge-chair': {
+        name: 'Lounge-Sessel',
+        shape: 'rect',
+        w: 80,
+        l: 85,
+        h: 78,
+        color: 'hsl(36, 32%, 48%)',
+        color3d: '#c8b6a6',
+        category: 'living',
+        categoryLabel: 'Wohnen',
+        collisionEnabled: true
+    },
+    'bookshelf': {
+        name: 'Regal / Raumteiler',
+        shape: 'rect',
+        w: 120,
+        l: 38,
+        h: 160,
+        color: 'hsl(28, 45%, 38%)',
+        color3d: '#a27b5c',
+        category: 'living office',
+        categoryLabel: 'Wohnen / Büro',
+        collisionEnabled: true
+    },
+    'coffee-table-set': {
+        name: 'Couchtisch-Set',
+        shape: 'rect',
+        w: 100,
+        l: 65,
+        h: 42,
+        color: 'hsl(38, 28%, 52%)',
+        color3d: '#e5ded6',
+        category: 'living',
+        categoryLabel: 'Wohnen',
+        collisionEnabled: true,
+        isTable: true
+    },
+    'tv-lowboard': {
+        name: 'TV-Lowboard',
+        shape: 'rect',
+        w: 180,
+        l: 45,
+        h: 45,
+        color: 'hsl(30, 35%, 28%)',
+        color3d: '#3d2817',
+        category: 'living',
+        categoryLabel: 'Wohnen',
+        collisionEnabled: true
+    },
+    'arc-lamp': {
+        name: 'Bogenleuchte',
+        shape: 'rect',
+        w: 45,
+        l: 160,
+        h: 210,
+        color: 'hsl(45, 60%, 55%)',
+        color3d: '#d4af37',
+        category: 'decor living',
+        categoryLabel: 'Deko & Licht',
+        collisionEnabled: true,
+        isLamp: true,
+        lightColor: 0xffeedd,
+        lightIntensity: 10000,
+        lightDistance: 450
+    },
+    'plant': {
+        name: 'Zimmerpflanze',
+        shape: 'circle',
+        w: 55,
+        l: 55,
+        h: 135,
+        color: 'hsl(142, 50%, 35%)',
+        color3d: '#2d6a4f',
+        category: 'decor living',
+        categoryLabel: 'Deko & Licht',
+        collisionEnabled: true,
+        isPlant: true
+    },
+    'nightstand': {
+        name: 'Nachttisch',
+        shape: 'rect',
+        w: 48,
+        l: 40,
+        h: 52,
+        color: 'hsl(33, 40%, 40%)',
+        color3d: '#8b5a2b',
+        category: 'bedroom living',
+        categoryLabel: 'Schlafen',
+        collisionEnabled: true,
+        isNightstand: true
+    }
 };
 
 function loadExampleRoom() {
@@ -5387,6 +9299,9 @@ function applyProjectData(data) {
     State.elements = data.elements || [];
     State.installations = data.installations || [];
     
+    // Clamp placed furniture to room boundaries
+    State.furniture.forEach(f => CollisionEngine.clampFurnitureToRoom(f, State.room));
+    
     // Sync UI inputs
     syncRoomInputsUI();
     
@@ -5425,17 +9340,20 @@ function showToast(msg) {
 // --- SELECTION & SIDEBAR PROPERTY PANEL ---
 
 function selectItem(item, type) {
+    const prevItem = State.selectedItem;
+    const prevType = State.selectedItemType;
+    
     State.selectedItem = item;
     State.selectedItemType = type;
     
     const panel = document.getElementById('properties-panel');
-    if (!panel) return;
-    
-    if (item) {
-        panel.classList.add('active');
-        buildPropertiesPanelContent();
-    } else {
-        panel.classList.remove('active');
+    if (panel) {
+        if (item) {
+            panel.classList.add('active');
+            buildPropertiesPanelContent();
+        } else {
+            panel.classList.remove('active');
+        }
     }
     
     // Draw canvas selection borders
@@ -5443,14 +9361,24 @@ function selectItem(item, type) {
     
     // Re-draw in 3D
     if (Viewer3D.renderer) {
-        if (type === 'furniture') {
+        // Strip selection indicator from previously selected furniture
+        if (prevItem && prevItem !== item && prevType === 'furniture' && State.furniture && State.furniture.includes(prevItem)) {
+            Viewer3D.updateFurniture3D(prevItem);
+        }
+        
+        if (type === 'furniture' && item) {
             Viewer3D.updateFurniture3D(item);
-        } else if (type === 'element') {
+        } else if (type === 'element' || prevType === 'element') {
             Viewer3D.rebuildWalls3D();
-        } else if (type === 'installation') {
+        } else if (type === 'installation' || prevType === 'installation') {
             Viewer3D.updateInstallations3D();
         }
     }
+}
+
+function showPropertiesTab() {
+    const panel = document.getElementById('properties-panel');
+    if (panel) panel.classList.add('active');
 }
 
 function hslToHex(h, s, l) {
@@ -6120,6 +10048,7 @@ function attachPropertiesListeners() {
             copy.x += 20; // offset slightly
             copy.y += 20;
             copy.name = item.name + ' Kopie';
+            CollisionEngine.clampFurnitureToRoom(copy);
             
             History.pushState();
             State.furniture.push(copy);
@@ -6166,6 +10095,9 @@ function attachPropertiesListeners() {
 }
 
 function updateSelectedMesh() {
+    if (State.selectedItemType === 'furniture' && State.selectedItem) {
+        CollisionEngine.clampFurnitureToRoom(State.selectedItem);
+    }
     CollisionEngine.updateAllCollisions();
     Editor2D.draw();
     
@@ -6230,9 +10162,115 @@ function syncPropertiesPanel() {
     }
 }
 
+// --- THEME MANAGER (DARK / LIGHT VERCEL MONOCHROME THEMES) ---
+const ThemeManager = {
+    currentTheme: 'dark',
+    STORAGE_KEY: 'roomcraft_theme',
+
+    init() {
+        if (typeof window === 'undefined') return;
+
+        let stored = null;
+        try {
+            stored = localStorage.getItem(this.STORAGE_KEY) || localStorage.getItem('roomcraft-theme');
+        } catch (e) {}
+
+        if (stored === 'light' || stored === 'dark') {
+            this.currentTheme = stored;
+        } else {
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            this.currentTheme = prefersDark ? 'dark' : 'light';
+        }
+
+        this.applyTheme(this.currentTheme, false);
+
+        // Listen for OS scheme adjustments if not pinned by user
+        if (window.matchMedia) {
+            try {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                    let hasStored = null;
+                    try { hasStored = localStorage.getItem(this.STORAGE_KEY) || localStorage.getItem('roomcraft-theme'); } catch(err) {}
+                    if (!hasStored) {
+                        this.applyTheme(e.matches ? 'dark' : 'light', true);
+                    }
+                });
+            } catch (err) {}
+        }
+
+        // Event listener on theme toggle button(s)
+        const toggleBtn = document.getElementById('btn-toggle-theme') || document.getElementById('btn-theme-toggle');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => this.toggleTheme());
+        }
+    },
+
+    toggleTheme() {
+        const next = this.currentTheme === 'dark' ? 'light' : 'dark';
+        try {
+            localStorage.setItem(this.STORAGE_KEY, next);
+            localStorage.setItem('roomcraft-theme', next);
+        } catch (e) {}
+        this.applyTheme(next, true);
+    },
+
+    applyTheme(theme, notify = true) {
+        this.currentTheme = theme;
+        if (typeof document !== 'undefined' && document.documentElement) {
+            document.documentElement.setAttribute('data-theme', theme);
+            if (document.body) {
+                if (theme === 'light') {
+                    document.body.setAttribute('data-theme', 'light');
+                } else {
+                    document.body.removeAttribute('data-theme');
+                }
+            }
+
+            const meta = document.querySelector('meta[name="color-scheme"]');
+            if (meta) meta.setAttribute('content', theme === 'light' ? 'light' : 'dark');
+
+            // Update Toggle Button UI Icons & aria labels
+            const toggleBtns = [document.getElementById('btn-toggle-theme'), document.getElementById('btn-theme-toggle')].filter(Boolean);
+            toggleBtns.forEach(btn => {
+                const isDark = theme === 'dark';
+                btn.setAttribute('title', isDark ? 'Zu hellem Design wechseln' : 'Zu dunklem Design wechseln');
+                btn.setAttribute('aria-label', isDark ? 'Zu hellem Design wechseln' : 'Zu dunklem Design wechseln');
+                if (isDark) {
+                    btn.classList.remove('light-active');
+                } else {
+                    btn.classList.add('light-active');
+                }
+            });
+        }
+
+        // Update 2D Canvas Editor
+        if (typeof Editor2D !== 'undefined' && Editor2D.draw) {
+            Editor2D.draw();
+        }
+
+        // Update 3D WebGL Viewer Background
+        if (typeof Viewer3D !== 'undefined') {
+            if (typeof Viewer3D.setTheme === 'function') {
+                Viewer3D.setTheme(theme);
+            } else if (Viewer3D.scene && Viewer3D.scene.background && typeof THREE !== 'undefined') {
+                Viewer3D.scene.background = new THREE.Color(theme === 'dark' ? 0x09090b : 0xf8fafc);
+            }
+        }
+    }
+};
+
 // --- UI EVENT BINDINGS (SIDEBAR & TOOLBAR) ---
 
 function initUIEvents() {
+    // Initialize Theme Manager
+    ThemeManager.init();
+
+    // Global keyboard dismissal for properties panel
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && State.selectedItem) {
+            selectItem(null, null);
+        }
+    });
+
     // 1. Sidebar Tab Switching
     const tabBtns = document.querySelectorAll('.tab-btn');
     tabBtns.forEach(btn => {
@@ -6278,8 +10316,14 @@ function initUIEvents() {
                 inst.position = Math.max(5, Math.min(maxPos - 5, inst.position));
             });
             
+            // Clamp all placed furniture items to new room boundaries
+            State.furniture.forEach(f => {
+                CollisionEngine.clampFurnitureToRoom(f, State.room);
+            });
+            
             CollisionEngine.updateAllCollisions();
             Editor2D.draw();
+            syncPropertiesPanel();
             if (Viewer3D.renderer) {
                 Viewer3D.rebuildFullRoom();
             }
@@ -6454,6 +10498,99 @@ function initUIEvents() {
             State.furniture.forEach(f => Viewer3D.updateFurniture3D(f));
         }
     });
+
+    const snapChk = document.getElementById('toggle-snapping');
+    if (snapChk) {
+        snapChk.addEventListener('change', (e) => {
+            State.settings.smartSnappingEnabled = e.target.checked;
+            Editor2D.draw();
+        });
+    }
+
+    const btnToggleLight = document.getElementById('btn-toggle-light-3d');
+    if (btnToggleLight) {
+        btnToggleLight.addEventListener('click', () => {
+            State.settings.ceilingLampsEnabled = !State.settings.ceilingLampsEnabled;
+            if (State.settings.ceilingLampsEnabled) {
+                btnToggleLight.classList.add('active');
+            } else {
+                btnToggleLight.classList.remove('active');
+            }
+            const toggleCeilingLampsChk = document.getElementById('toggle-ceiling-lamps');
+            if (toggleCeilingLampsChk) {
+                toggleCeilingLampsChk.checked = State.settings.ceilingLampsEnabled;
+            }
+            if (Viewer3D.renderer) {
+                Viewer3D.updateCeilingLampsLight();
+            }
+            Editor2D.draw();
+        });
+    }
+
+    const btnWalk = document.getElementById('btn-walkthrough');
+    if (btnWalk) {
+        btnWalk.addEventListener('click', () => {
+            Viewer3D.setWalkthroughMode(!Viewer3D.isWalkthrough);
+        });
+    }
+
+    // Material- & Stückliste (BOM) Dialog & Exports
+    BOMDialog.init();
+
+    const btnOpenBOM = document.getElementById('btn-open-bom');
+    if (btnOpenBOM) {
+        btnOpenBOM.addEventListener('click', () => {
+            BOMDialog.open();
+        });
+    }
+
+    const btnExportDropdown = document.getElementById('btn-export-dropdown');
+    const exportMenu = document.getElementById('export-menu');
+    if (btnExportDropdown && exportMenu) {
+        btnExportDropdown.addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportMenu.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', () => {
+            if (!exportMenu.classList.contains('hidden')) {
+                exportMenu.classList.add('hidden');
+            }
+        });
+    }
+
+    const btnExport2DPNG = document.getElementById('btn-export-2d-png');
+    if (btnExport2DPNG) {
+        btnExport2DPNG.addEventListener('click', () => {
+            if (exportMenu) exportMenu.classList.add('hidden');
+            ExportManager.export2DHighResPNG();
+        });
+    }
+
+    const btnExport3DPNG = document.getElementById('btn-export-3d-png');
+    if (btnExport3DPNG) {
+        btnExport3DPNG.addEventListener('click', () => {
+            if (exportMenu) exportMenu.classList.add('hidden');
+            ExportManager.export3DHighResPNG();
+        });
+    }
+
+    const btnExportBOMModal = document.getElementById('btn-export-bom-modal');
+    if (btnExportBOMModal) {
+        btnExportBOMModal.addEventListener('click', () => {
+            if (exportMenu) exportMenu.classList.add('hidden');
+            BOMDialog.open();
+        });
+    }
+
+    const btnExportJSONMenu = document.getElementById('btn-export-json-menu');
+    if (btnExportJSONMenu) {
+        btnExportJSONMenu.addEventListener('click', () => {
+            if (exportMenu) exportMenu.classList.add('hidden');
+            const btnExportJson = document.getElementById('btn-export-json');
+            if (btnExportJson) btnExportJson.click();
+        });
+    }
     
     // 6. Action Buttons
     document.getElementById('btn-save-project').addEventListener('click', () => {
@@ -6546,6 +10683,25 @@ function initUIEvents() {
         Editor2D.resetView();
     });
     
+    // Category Filter Pills (Catalog filtering)
+    const catPills = document.querySelectorAll('.cat-pill');
+    catPills.forEach(pill => {
+        pill.addEventListener('click', () => {
+            catPills.forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            const selected = pill.dataset.category;
+
+            document.querySelectorAll('.furniture-presets-grid .preset-btn').forEach(btn => {
+                if (selected === 'all') {
+                    btn.style.display = '';
+                } else {
+                    const cats = (btn.dataset.category || '').split(' ');
+                    btn.style.display = cats.includes(selected) ? '' : 'none';
+                }
+            });
+        });
+    });
+
     // 7. Preset Furniture placement click
     const presetBtns = document.querySelectorAll('.preset-btn');
     presetBtns.forEach(btn => {
@@ -6557,6 +10713,8 @@ function initUIEvents() {
             // Create furniture at room center
             const f = {
                 id: 'f_' + Date.now(),
+                presetKey: presetKey,
+                preset: presetKey,
                 name: p.name,
                 shape: p.shape,
                 w: p.w,
@@ -6566,16 +10724,24 @@ function initUIEvents() {
                 y: State.room.depth / 2,
                 rotation: 0,
                 color: p.color,
+                color3d: p.color3d || p.color,
                 collisionEnabled: p.collisionEnabled,
                 isObstacle: p.isObstacle || false,
                 isRug: p.isRug || false,
                 rugTexture: p.rugTexture || 'flat',
                 isTable: p.isTable || false,
+                isLamp: p.isLamp || false,
+                isPlant: p.isPlant || false,
+                isNightstand: p.isNightstand || false,
+                lightColor: p.lightColor,
+                lightIntensity: p.lightIntensity,
+                lightDistance: p.lightDistance,
                 isColliding: false,
                 elevation: p.elevation || 0,
                 tvSize: p.tvSize !== undefined ? p.tvSize : null
             };
             
+            CollisionEngine.clampFurnitureToRoom(f);
             History.pushState();
             State.furniture.push(f);
             CollisionEngine.updateAllCollisions();
@@ -6916,6 +11082,15 @@ function initSurfaceTabListeners() {
             const floor = card.dataset.floor;
             setFloorTexture(floor);
         });
+
+        // Generate procedural preview data URL if canvas-based
+        const previewImg = card.querySelector('.floor-card-preview');
+        if (previewImg && (!previewImg.getAttribute('src') || previewImg.dataset.procedural)) {
+            if (typeof TextureGenerator !== 'undefined' && TextureGenerator.getFloorPreviewUrl) {
+                const dataUrl = TextureGenerator.getFloorPreviewUrl(card.dataset.floor);
+                if (dataUrl) previewImg.src = dataUrl;
+            }
+        }
     });
     
     // Floor texture scale slider
@@ -6940,6 +11115,46 @@ function initSurfaceTabListeners() {
             Viewer3D.buildFloor3D();
         });
     }
+
+    // Ceiling Lamp Controls
+    const toggleLamps = document.getElementById('toggle-ceiling-lamps');
+    if (toggleLamps) {
+        toggleLamps.addEventListener('change', (e) => {
+            State.settings.ceilingLampsEnabled = e.target.checked;
+            const btnToggleLight = document.getElementById('btn-toggle-light-3d');
+            if (btnToggleLight) {
+                if (e.target.checked) btnToggleLight.classList.add('active');
+                else btnToggleLight.classList.remove('active');
+            }
+            if (Viewer3D.renderer) {
+                Viewer3D.updateCeilingLampsLight();
+            }
+            Editor2D.draw();
+        });
+    }
+
+    const lampIntensitySlider = document.getElementById('ceiling-lamp-intensity-slider');
+    const lampIntensityVal = document.getElementById('ceiling-lamp-intensity-val');
+    if (lampIntensitySlider) {
+        lampIntensitySlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value) || 1.0;
+            State.settings.ceilingLampIntensity = val;
+            if (lampIntensityVal) lampIntensityVal.textContent = Math.round(val * 100) + '%';
+            if (Viewer3D.renderer) {
+                Viewer3D.updateCeilingLampsLight();
+            }
+        });
+    }
+
+    const lampColorInput = document.getElementById('ceiling-lamp-color');
+    if (lampColorInput) {
+        lampColorInput.addEventListener('input', (e) => {
+            State.settings.ceilingLampColor = e.target.value;
+            if (Viewer3D.renderer) {
+                Viewer3D.updateCeilingLampsLight();
+            }
+        });
+    }
 }
 
 function syncSurfaceTabUI() {
@@ -6962,13 +11177,30 @@ function syncSurfaceTabUI() {
         }
     });
     
-    // Highlight active floor card
+    // Highlight active floor card (supporting aliases)
     const currentFloor = State.room.floorTexture || 'laminat_hell';
+    const regFloors = (typeof TextureRegistry !== 'undefined' && Array.isArray(TextureRegistry.floors)) ? TextureRegistry.floors : [];
+    const activeDef = regFloors.find(f => f.id === currentFloor || (f.aliases && f.aliases.includes(currentFloor)));
+    const resolvedFloor = activeDef ? activeDef.id : currentFloor;
+
     document.querySelectorAll('.floor-card').forEach(card => {
-        if (card.dataset.floor === currentFloor) {
+        const cardFloor = card.dataset.floor;
+        const cardDef = regFloors.find(f => f.id === cardFloor);
+        const matches = (cardFloor === currentFloor) || 
+                        (cardFloor === resolvedFloor) || 
+                        (cardDef && cardDef.aliases && cardDef.aliases.includes(currentFloor));
+        if (matches) {
             card.classList.add('active');
         } else {
             card.classList.remove('active');
+        }
+
+        const previewImg = card.querySelector('.floor-card-preview');
+        if (previewImg && (!previewImg.getAttribute('src') || previewImg.dataset.procedural)) {
+            if (typeof TextureGenerator !== 'undefined' && TextureGenerator.getFloorPreviewUrl) {
+                const dataUrl = TextureGenerator.getFloorPreviewUrl(cardFloor);
+                if (dataUrl) previewImg.src = dataUrl;
+            }
         }
     });
     
@@ -6978,6 +11210,33 @@ function syncSurfaceTabUI() {
     const floorScaleVal = document.getElementById('floor-texture-scale-val');
     if (floorScaleSlider) floorScaleSlider.value = currentScale;
     if (floorScaleVal) floorScaleVal.textContent = currentScale + '%';
+
+    // Sync ceiling lamp controls
+    const toggleLamps = document.getElementById('toggle-ceiling-lamps');
+    if (toggleLamps) {
+        toggleLamps.checked = State.settings.ceilingLampsEnabled !== false;
+    }
+    const btnToggleLight = document.getElementById('btn-toggle-light-3d');
+    if (btnToggleLight) {
+        if (State.settings.ceilingLampsEnabled !== false) {
+            btnToggleLight.classList.add('active');
+        } else {
+            btnToggleLight.classList.remove('active');
+        }
+    }
+    const lampIntensitySlider = document.getElementById('ceiling-lamp-intensity-slider');
+    const lampIntensityVal = document.getElementById('ceiling-lamp-intensity-val');
+    const curIntensity = State.settings.ceilingLampIntensity !== undefined ? State.settings.ceilingLampIntensity : 1.0;
+    if (lampIntensitySlider) {
+        lampIntensitySlider.value = curIntensity;
+    }
+    if (lampIntensityVal) {
+        lampIntensityVal.textContent = Math.round(curIntensity * 100) + '%';
+    }
+    const lampColorInput = document.getElementById('ceiling-lamp-color');
+    if (lampColorInput) {
+        lampColorInput.value = State.settings.ceilingLampColor || '#ffeedd';
+    }
 }
 
 function updatePlacedListsUI() {
@@ -7050,20 +11309,62 @@ function updatePlacedListsUI() {
 }
 
 // --- INITIALIZATION ---
-window.addEventListener('DOMContentLoaded', () => {
-    console.log("RoomCraft App loaded - Version 1.1.3");
-    // 1. Initialize 2D Canvas Editor
-    Editor2D.init();
-    
-    // 2. Initialize UI Controls & Event listeners
-    initUIEvents();
-    
-    // 3. Initial state UI synching
-    syncRoomInputsUI();
-    
-    // 4. Initialize 3D Viewer
-    Viewer3D.init();
-    
-    // 5. Load default example room to showcase capabilities immediately
-    loadExampleRoom();
-});
+if (typeof window !== 'undefined') {
+    window.addEventListener('DOMContentLoaded', () => {
+        console.log("RoomCraft App loaded - Version 1.1.3");
+        // 1. Initialize 2D Canvas Editor
+        Editor2D.init();
+        
+        // 2. Initialize UI Controls & Event listeners
+        initUIEvents();
+        
+        // 3. Initial state UI synching
+        syncRoomInputsUI();
+        
+        // 4. Initialize 3D Viewer
+        Viewer3D.init();
+        
+        // 5. Load default example room to showcase capabilities immediately
+        loadExampleRoom();
+    });
+}
+
+// --- NODE.JS MODULE EXPORT BRIDGE ---
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        State,
+        History,
+        CollisionEngine,
+        Vector2D,
+        getCeilingHeightAt,
+        getFurnitureCorners,
+        Presets,
+        getWallPitchHeightAt,
+        getPitchInterval,
+        getClosestWall,
+        formatDim,
+        wallUDToRoomXY,
+        projectToWall,
+        projectToSpecificWall,
+        getWallCoordinates,
+        createSlantedBoxGeometry,
+        isMouseOverWallElement,
+        checkElementOverlap,
+        clampSkylightConstraints,
+        isValidWallForElement,
+        getCeilingLampPositions,
+        TextureRegistry,
+        TextureGenerator,
+        TextureCache,
+        Editor2D,
+        Viewer3D,
+        SmartSnapping,
+        BOMCalculator,
+        ExportManager,
+        BOMDialog,
+        WalkthroughMode,
+        selectItem,
+        showPropertiesTab,
+        ThemeManager
+    };
+}

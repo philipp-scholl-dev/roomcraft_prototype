@@ -3,11 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>RoomCraft - Premium 2D/3D Raumplaner</title>
+    <!-- Inline Theme Initializer (FOUC Prevention) -->
+    <script>
+        (function() {
+            try {
+                var saved = localStorage.getItem('roomcraft_theme');
+                var isDark = saved ? (saved === 'dark') : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                var theme = isDark ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- CSS stylesheet -->
     <link rel="stylesheet" href="style.css?v=1.1.3">
     <!-- Lucide Icons -->
@@ -334,54 +348,94 @@
                     <h2>Möbel-Vorlagen</h2>
                     <p class="section-desc">Klicken Sie, um ein Möbelstück im Raum zu platzieren.</p>
                     
+                    <!-- Category Filter Tabs -->
+                    <div class="catalog-category-filter" id="furniture-category-filter">
+                        <button class="cat-pill active" data-category="all">Alle</button>
+                        <button class="cat-pill" data-category="living">Wohnen</button>
+                        <button class="cat-pill" data-category="dining">Essen</button>
+                        <button class="cat-pill" data-category="bedroom">Schlafen</button>
+                        <button class="cat-pill" data-category="office">Büro</button>
+                        <button class="cat-pill" data-category="decor">Deko & Licht</button>
+                    </div>
+                    
                     <div class="furniture-presets-grid">
-                        <button class="preset-btn" data-preset="bed">
+                        <button class="preset-btn" data-preset="bed" data-category="bedroom">
                             <i data-lucide="bed"></i>
                             <span>Doppelbett</span>
                         </button>
-                        <button class="preset-btn" data-preset="wardrobe">
+                        <button class="preset-btn" data-preset="wardrobe" data-category="bedroom">
                             <i data-lucide="columns"></i>
                             <span>Schrank</span>
                         </button>
-                        <button class="preset-btn" data-preset="desk">
+                        <button class="preset-btn" data-preset="desk" data-category="office">
                             <i data-lucide="projector"></i>
                             <span>Schreibtisch</span>
                         </button>
-                        <button class="preset-btn" data-preset="chair">
+                        <button class="preset-btn" data-preset="chair" data-category="dining office">
                             <i data-lucide="tablet"></i>
                             <span>Stuhl</span>
                         </button>
-                        <button class="preset-btn" data-preset="sofa">
+                        <button class="preset-btn" data-preset="sofa" data-category="living">
                             <i data-lucide="armchair"></i>
                             <span>Sofa</span>
                         </button>
-                        <button class="preset-btn" data-preset="table">
+                        <button class="preset-btn" data-preset="table" data-category="dining">
                             <i data-lucide="grid"></i>
                             <span>Esstisch</span>
                         </button>
-                        <button class="preset-btn" data-preset="custom-rect">
+                        <button class="preset-btn" data-preset="custom-rect" data-category="all">
                             <i data-lucide="square"></i>
                             <span>Eckiges Custom</span>
                         </button>
-                        <button class="preset-btn" data-preset="round-table">
+                        <button class="preset-btn" data-preset="round-table" data-category="dining living">
                             <i data-lucide="disc"></i>
                             <span>Runder Tisch</span>
                         </button>
-                        <button class="preset-btn" data-preset="custom-circle">
+                        <button class="preset-btn" data-preset="custom-circle" data-category="all">
                             <i data-lucide="circle"></i>
                             <span>Rundes Custom</span>
                         </button>
-                        <button class="preset-btn" data-preset="tv">
+                        <button class="preset-btn" data-preset="tv" data-category="living">
                             <i data-lucide="tv"></i>
                             <span>Fernseher (TV)</span>
                         </button>
-                        <button class="preset-btn" data-preset="rug-rect">
+                        <button class="preset-btn" data-preset="rug-rect" data-category="decor living">
                             <i data-lucide="layout"></i>
                             <span>Teppich (eckig)</span>
                         </button>
-                        <button class="preset-btn" data-preset="rug-circle">
+                        <button class="preset-btn" data-preset="rug-circle" data-category="decor living">
                             <i data-lucide="disc"></i>
                             <span>Teppich (rund)</span>
+                        </button>
+                        
+                        <!-- NEW PRESETS 1-7 (Milestone 3 / Requirement R3) -->
+                        <button class="preset-btn" data-preset="lounge-chair" data-category="living">
+                            <i data-lucide="armchair"></i>
+                            <span>Lounge-Sessel</span>
+                        </button>
+                        <button class="preset-btn" data-preset="bookshelf" data-category="living office">
+                            <i data-lucide="book-open"></i>
+                            <span>Regal / Divider</span>
+                        </button>
+                        <button class="preset-btn" data-preset="coffee-table-set" data-category="living">
+                            <i data-lucide="disc"></i>
+                            <span>Couchtisch-Set</span>
+                        </button>
+                        <button class="preset-btn" data-preset="tv-lowboard" data-category="living">
+                            <i data-lucide="tv"></i>
+                            <span>TV-Lowboard</span>
+                        </button>
+                        <button class="preset-btn" data-preset="arc-lamp" data-category="decor living">
+                            <i data-lucide="lamp"></i>
+                            <span>Bogenleuchte</span>
+                        </button>
+                        <button class="preset-btn" data-preset="plant" data-category="decor living">
+                            <i data-lucide="sprout"></i>
+                            <span>Zimmerpflanze</span>
+                        </button>
+                        <button class="preset-btn" data-preset="nightstand" data-category="bedroom living">
+                            <i data-lucide="archive"></i>
+                            <span>Nachttisch</span>
                         </button>
                     </div>
 
@@ -471,6 +525,96 @@
                                 <span>Shaggy Kuschelflor</span>
                             </div>
                         </div>
+                        <div class="floor-card" data-floor="parquet_oak">
+                            <div class="floor-thumb floor-thumb-parquet">
+                                <img class="floor-card-preview" data-procedural="true" alt="Parkett Eiche" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Parkett Eiche</strong>
+                                <span>Echtholz Schiffsboden</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="herringbone">
+                            <div class="floor-thumb floor-thumb-herringbone">
+                                <img class="floor-card-preview" data-procedural="true" alt="Fischgrät-Parkett" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Fischgrät-Parkett</strong>
+                                <span>Französisches Fischgrät</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="wood_ash">
+                            <div class="floor-thumb floor-thumb-ash">
+                                <img class="floor-card-preview" data-procedural="true" alt="Eschenholz Hell" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Eschenholz Hell</strong>
+                                <span>Skandinavische Esche</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="wood_walnut">
+                            <div class="floor-thumb floor-thumb-walnut">
+                                <img class="floor-card-preview" data-procedural="true" alt="Nussbaum Dunkel" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Nussbaum Dunkel</strong>
+                                <span>Amerikanischer Nussbaum</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="tiles_gray">
+                            <div class="floor-thumb floor-thumb-tiles">
+                                <img class="floor-card-preview" data-procedural="true" alt="Fliesen Grau 60x60" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Fliesen Grau 60x60</strong>
+                                <span>Feinsteinzeug matt</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="marble_white">
+                            <div class="floor-thumb floor-thumb-marble">
+                                <img class="floor-card-preview" data-procedural="true" alt="Marmor Weiß" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Marmor Weiß</strong>
+                                <span>Carrara poliert</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="concrete">
+                            <div class="floor-thumb floor-thumb-concrete">
+                                <img class="floor-card-preview" data-procedural="true" alt="Sichtbeton / Estrich" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Sichtbeton / Estrich</strong>
+                                <span>Industrielook versiegelt</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="terrazzo">
+                            <div class="floor-thumb floor-thumb-terrazzo">
+                                <img class="floor-card-preview" data-procedural="true" alt="Terrazzo Klassik" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Terrazzo Klassik</strong>
+                                <span>Gesprenkelter Verbundestrich</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="tiles_slate">
+                            <div class="floor-thumb floor-thumb-slate">
+                                <img class="floor-card-preview" data-procedural="true" alt="Schiefer Anthrazit" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Schiefer Anthrazit</strong>
+                                <span>Spaltrauer Naturschiefer</span>
+                            </div>
+                        </div>
+                        <div class="floor-card" data-floor="carpet_warm">
+                            <div class="floor-thumb floor-thumb-carpet">
+                                <img class="floor-card-preview" data-procedural="true" alt="Objektteppich Sand" style="width:100%;height:100%;object-fit:cover;display:none;" onload="this.style.display='block'" />
+                            </div>
+                            <div class="floor-meta">
+                                <strong>Objektteppich Sand</strong>
+                                <span>Kompakter Schlingenvelours</span>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="floor-scale-box" style="margin-top: 14px; padding: 12px; background: rgba(30, 41, 59, 0.45); border: 1px solid var(--border-color); border-radius: 8px;">
@@ -483,33 +627,92 @@
                             <button class="btn btn-secondary btn-sm" id="btn-reset-floor-scale" title="Standard-Skalierung wiederherstellen" style="padding: 3px 8px; font-size: 11px;">Reset</button>
                         </div>
                     </div>
+
+                    <div class="divider" style="margin: 18px 0 14px 0;"></div>
+
+                    <h2>Deckenbeleuchtung & Licht</h2>
+                    <p class="section-desc">Realistische 3D Deckenlampen und Ausleuchtung:</p>
+
+                    <div class="light-control-box" style="padding: 12px; background: rgba(30, 41, 59, 0.45); border: 1px solid var(--border-color); border-radius: 8px;">
+                        <div class="setting-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <span style="font-weight: 500; font-size: 13px;">Deckenleuchten aktiv</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggle-ceiling-lamps" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                                <label for="ceiling-lamp-intensity-slider" style="font-weight: 500; font-size: 12.5px; color: var(--text-secondary);">Lichtstärke</label>
+                                <span id="ceiling-lamp-intensity-val" style="font-size: 12px; color: var(--primary-light, #a78bfa); font-weight: 600;">100%</span>
+                            </div>
+                            <input type="range" id="ceiling-lamp-intensity-slider" min="0" max="2.0" value="1.0" step="0.05" style="width: 100%;">
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <label for="ceiling-lamp-color" style="font-weight: 500; font-size: 12.5px; color: var(--text-secondary);">Lichttemperatur / Farbe</label>
+                            <input type="color" id="ceiling-lamp-color" value="#ffeedd" style="width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; background: transparent;">
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <!-- Properties Panel (Floating or pinned at bottom) -->
-            <div class="properties-panel" id="properties-panel">
-                <div class="properties-header">
-                    <h3>Ausgewähltes Objekt</h3>
-                    <button class="close-prop-btn" id="close-properties"><i data-lucide="x"></i></button>
-                </div>
-                <div class="properties-content" id="properties-content">
-                    <!-- Loaded dynamically via JS -->
-                </div>
-            </div>
         </aside>
 
         <!-- Main Workspace Area -->
         <main class="workspace">
             <!-- Top Toolbar -->
             <header class="toolbar">
+                <!-- Cluster 1 (Left): Project title -->
                 <div class="toolbar-left">
-                    <div class="view-toggles">
-                        <button class="tool-btn active" id="btn-view-2d">2D Grundriss</button>
-                        <button class="tool-btn" id="btn-view-split">Split-Screen</button>
-                        <button class="tool-btn" id="btn-view-3d">3D Vorschau</button>
+                    <div class="project-info" title="Aktueller Raum">
+                        <span class="project-title" id="project-title-display">Mein Raum</span>
+                        <span class="project-badge">Studio</span>
                     </div>
+                </div>
+
+                <!-- Cluster 2 (Center): Segmented View Switcher -->
+                <div class="toolbar-center">
+                    <div class="view-switcher view-toggles" role="tablist" aria-label="Ansichtsmodus">
+                        <button class="view-btn tool-btn active" id="btn-view-2d" role="tab" aria-selected="true" title="2D Grundrissansicht">
+                            <i data-lucide="layout-grid"></i>
+                            <span>2D</span>
+                        </button>
+                        <button class="view-btn tool-btn" id="btn-view-split" role="tab" aria-selected="false" title="Geteilte 2D & 3D Ansicht">
+                            <i data-lucide="columns"></i>
+                            <span>Split</span>
+                        </button>
+                        <button class="view-btn tool-btn" id="btn-view-3d" role="tab" aria-selected="false" title="3D WebGL Vorschau">
+                            <i data-lucide="box"></i>
+                            <span>3D</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Cluster 3 (Right): Quick toggles + Actions + Utilities + Theme -->
+                <div class="toolbar-right">
+                    <!-- Quick Toggles -->
+                    <div class="toolbar-group toolbar-toggles-group" role="group" aria-label="Editor-Einstellungen">
+                        <label class="toggle-switch" title="Smart Snapping & Ausrichtungshilfen [Alt zum Deaktivieren]">
+                            <input type="checkbox" id="toggle-snapping" checked>
+                            <span class="slider"></span>
+                            <span class="toggle-text">Snapping</span>
+                        </label>
+                        <label class="toggle-switch" title="10cm Hilfsraster ein-/ausblenden">
+                            <input type="checkbox" id="toggle-grid" checked>
+                            <span class="slider"></span>
+                            <span class="toggle-text">Raster</span>
+                        </label>
+                        <label class="toggle-switch" title="Echtzeit-Kollisionsüberprüfung aktivieren">
+                            <input type="checkbox" id="toggle-collision" checked>
+                            <span class="slider"></span>
+                            <span class="toggle-text">Kollision</span>
+                        </label>
+                    </div>
+
                     <div class="toolbar-separator"></div>
-                    <div class="history-controls">
+
+                    <!-- History (Undo / Redo) -->
+                    <div class="toolbar-group history-controls" role="group" aria-label="Verlauf">
                         <button class="btn btn-secondary tool-btn-icon" id="btn-undo" title="Rückgängig (Ctrl+Z)" disabled style="opacity: 0.4; pointer-events: none;">
                             <i data-lucide="undo"></i>
                         </button>
@@ -517,52 +720,76 @@
                             <i data-lucide="redo"></i>
                         </button>
                     </div>
-                </div>
-
-                <div class="toolbar-right">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="toggle-grid" checked>
-                        <span class="slider"></span>
-                        <span>Raster (10cm)</span>
-                    </label>
-
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="toggle-collision" checked>
-                        <span class="slider"></span>
-                        <span>Kollisionen</span>
-                    </label>
 
                     <div class="toolbar-separator"></div>
 
-                    <button class="btn btn-secondary" id="btn-save-project" title="Im Browser speichern">
-                        <i data-lucide="save"></i>
-                        <span>Speichern</span>
-                    </button>
-                    <button class="btn btn-secondary" id="btn-load-project" title="Aus dem Browser laden">
-                        <i data-lucide="folder-open"></i>
-                        <span>Laden</span>
-                    </button>
-                    
-                    <div class="toolbar-separator"></div>
-                    
-                    <button class="btn btn-secondary" id="btn-export-json" title="Als JSON-Datei exportieren">
-                        <i data-lucide="download"></i>
-                    </button>
-                    <button class="btn btn-secondary" id="btn-import-json" title="JSON-Datei importieren">
-                        <i data-lucide="upload"></i>
-                    </button>
-                    <input type="file" id="import-file-input" accept=".json" style="display: none;">
-                    
+                    <!-- Main Actions (BOM, Export, Clear) -->
+                    <div class="toolbar-group toolbar-actions-group" role="group" aria-label="Hauptaktionen">
+                        <button class="btn btn-secondary" id="btn-open-bom" title="Materialliste & Stückliste (BOM)">
+                            <i data-lucide="clipboard-list"></i>
+                            <span class="btn-text">Stückliste</span>
+                        </button>
+
+                        <div class="dropdown" id="export-dropdown">
+                            <button class="btn btn-secondary dropdown-toggle" id="btn-export-dropdown" title="Plan & Rendering exportieren">
+                                <i data-lucide="download"></i>
+                                <span class="btn-text">Export</span>
+                                <i data-lucide="chevron-down" class="dropdown-arrow"></i>
+                            </button>
+                            <div class="dropdown-menu hidden" id="export-menu">
+                                <button class="dropdown-item" id="btn-export-2d-png">
+                                    <i data-lucide="image"></i> 2D Grundriss (PNG High-Res)
+                                </button>
+                                <button class="dropdown-item" id="btn-export-3d-png">
+                                    <i data-lucide="camera"></i> 3D Ansicht (PNG Render)
+                                </button>
+                                <button class="dropdown-item" id="btn-export-bom-modal">
+                                    <i data-lucide="file-spreadsheet"></i> Stückliste (BOM)
+                                </button>
+                                <div class="dropdown-divider"></div>
+                                <button class="dropdown-item" id="btn-export-json-menu">
+                                    <i data-lucide="file-code"></i> Projektdatei (JSON)
+                                </button>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-danger tool-btn-icon" id="btn-clear-room" title="Raum leeren">
+                            <i data-lucide="trash-2"></i>
+                        </button>
+                    </div>
+
                     <div class="toolbar-separator"></div>
 
-                    <button class="btn btn-secondary" id="btn-example-room" title="Beispiel-Raum laden">
-                        <i data-lucide="sparkles"></i>
-                        <span>Demo</span>
-                    </button>
-                    <button class="btn btn-danger" id="btn-clear-room" title="Alles löschen">
-                        <i data-lucide="trash-2"></i>
-                        <span>Raum leeren</span>
-                    </button>
+                    <!-- Project Utilities (Save, Load, JSON, Demo) -->
+                    <div class="toolbar-group toolbar-project-group" role="group" aria-label="Projektdaten">
+                        <button class="btn btn-secondary tool-btn-icon" id="btn-save-project" title="Im Browser speichern">
+                            <i data-lucide="save"></i>
+                        </button>
+                        <button class="btn btn-secondary tool-btn-icon" id="btn-load-project" title="Aus dem Browser laden">
+                            <i data-lucide="folder-open"></i>
+                        </button>
+                        <button class="btn btn-secondary tool-btn-icon" id="btn-export-json" title="Als JSON-Datei exportieren">
+                            <i data-lucide="download"></i>
+                        </button>
+                        <button class="btn btn-secondary tool-btn-icon" id="btn-import-json" title="JSON-Datei importieren">
+                            <i data-lucide="upload"></i>
+                        </button>
+                        <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                        <button class="btn btn-secondary tool-btn-demo" id="btn-example-room" title="Beispiel-Raum laden (Demo)">
+                            <i data-lucide="sparkles"></i>
+                            <span class="btn-text">Demo</span>
+                        </button>
+                    </div>
+
+                    <div class="toolbar-separator"></div>
+
+                    <!-- Theme Toggle -->
+                    <div class="toolbar-group theme-group">
+                        <button class="btn btn-secondary tool-btn tool-btn-icon theme-toggle-btn" id="btn-toggle-theme" title="Design wechseln" aria-label="Farbschema wechseln">
+                            <i data-lucide="sun" class="theme-icon-sun theme-icon-light"></i>
+                            <i data-lucide="moon" class="theme-icon-moon theme-icon-dark"></i>
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -606,12 +833,18 @@
                                 <button class="view-mode-btn" id="btn-mode-texture" title="Wandfarben & Bodentexturen">
                                     <i data-lucide="palette"></i> Textur
                                 </button>
+                                <button class="view-mode-btn active" id="btn-toggle-light-3d" title="Deckenlicht umschalten" style="margin-left: 6px;">
+                                    <i data-lucide="lightbulb"></i> Licht
+                                </button>
+                                <button class="view-mode-btn" id="btn-walkthrough" title="3D Ego-Rundgang (Walkthrough-Modus)" style="margin-left: 6px;">
+                                    <i data-lucide="footprints"></i> Rundgang
+                                </button>
                             </div>
                         </div>
 
                         <div id="threeCanvasContainer"></div>
-                        <div class="three-controls-info">
-                            <i data-lucide="info"></i> Bewegen: WASD / Rechtsklick | Fliegen: Leertaste (hoch) / Shift (runter) | Neigen & Drehen: Pfeiltasten / Linksklick | Zoom: Scrollen | Wand anklicken für Farbauswahl
+                        <div class="three-controls-info" id="three-controls-info">
+                            <i data-lucide="info"></i> Bewegen: WASD / Pfeile | Umschauen: Maus | Rundgang: Klick auf "Rundgang"
                         </div>
                         <!-- Loading or notification in 3D -->
                         <div class="threejs-overlay" id="threejs-overlay">
@@ -621,7 +854,118 @@
                 </div>
             </div>
         </main>
+
+        <!-- Right-Side Properties Inspector Drawer (Feature 17: Non-Occluding) -->
+        <aside class="properties-panel" id="properties-panel">
+            <div class="properties-header">
+                <div class="properties-header-title">
+                    <i data-lucide="sliders"></i>
+                    <h3>Ausgewähltes Objekt</h3>
+                </div>
+                <button class="close-prop-btn" id="close-properties" title="Schließen (Esc)"><i data-lucide="x"></i></button>
+            </div>
+            <div class="properties-content" id="properties-content">
+                <!-- Loaded dynamically via JS -->
+            </div>
+        </aside>
     </div>
+
+    <!-- Material- & Stückliste (BOM) Modal Dialog -->
+    <dialog id="bom-modal" class="bom-dialog" aria-labelledby="bom-modal-title">
+        <div class="bom-modal-container">
+            <!-- Header -->
+            <div class="bom-modal-header">
+                <div class="bom-title-group">
+                    <div class="bom-icon-badge"><i data-lucide="file-spreadsheet"></i></div>
+                    <div>
+                        <h2 id="bom-modal-title">Material- & Stückliste (BOM)</h2>
+                        <p class="bom-subtitle">Architektonische Flächenberechnung, Öffnungen und Möbelverzeichnis nach DIN 277 / WoFlV</p>
+                    </div>
+                </div>
+                <button class="btn-dialog-close" id="btn-close-bom" aria-label="Schließen">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <!-- Tab Pills Navigation -->
+            <div class="bom-tabs">
+                <button class="bom-tab-btn active" data-bom-tab="bom-tab-overview">Übersicht</button>
+                <button class="bom-tab-btn" data-bom-tab="bom-tab-surfaces">Flächen & Wände</button>
+                <button class="bom-tab-btn" data-bom-tab="bom-tab-openings">Öffnungen & Elektro</button>
+                <button class="bom-tab-btn" data-bom-tab="bom-tab-furniture">Möbel-Stückliste</button>
+            </div>
+
+            <!-- Body / Content Panels -->
+            <div class="bom-modal-body">
+                <!-- Tab 1: Overview -->
+                <div class="bom-panel active" id="bom-tab-overview">
+                    <div class="bom-kpi-grid">
+                        <div class="bom-kpi-card">
+                            <span class="bom-kpi-label">Grundfläche</span>
+                            <strong class="bom-kpi-value" id="bom-kpi-area">0.00 m²</strong>
+                            <span class="bom-kpi-sub" id="bom-kpi-dims">0 × 0 m</span>
+                        </div>
+                        <div class="bom-kpi-card">
+                            <span class="bom-kpi-label">Netto-Wandfläche</span>
+                            <strong class="bom-kpi-value" id="bom-kpi-walls">0.00 m²</strong>
+                            <span class="bom-kpi-sub" id="bom-kpi-wall-cutouts">Abzug: 0.00 m²</span>
+                        </div>
+                        <div class="bom-kpi-card">
+                            <span class="bom-kpi-label">Deckenfläche</span>
+                            <strong class="bom-kpi-value" id="bom-kpi-ceiling">0.00 m²</strong>
+                            <span class="bom-kpi-sub" id="bom-kpi-pitches">Schrägen: keine</span>
+                        </div>
+                        <div class="bom-kpi-card highlight">
+                            <span class="bom-kpi-label">Möbel & Richtpreis</span>
+                            <strong class="bom-kpi-value" id="bom-kpi-furniture-cost">0 €</strong>
+                            <span class="bom-kpi-sub" id="bom-kpi-furniture-count">0 Objekte</span>
+                        </div>
+                    </div>
+                    <div class="bom-section-title">Zusammenfassung Raumdaten</div>
+                    <div class="bom-overview-table-wrap" id="bom-overview-summary"></div>
+                </div>
+
+                <!-- Tab 2: Surfaces -->
+                <div class="bom-panel" id="bom-tab-surfaces">
+                    <div class="bom-section-title">Flächen- und Massenberechnung nach DIN 277</div>
+                    <div class="bom-table-wrap" id="bom-surfaces-table-wrap"></div>
+                </div>
+
+                <!-- Tab 3: Openings & Installations -->
+                <div class="bom-panel" id="bom-tab-openings">
+                    <div class="bom-section-title">Wandöffnungen & Einbauten (Türen & Fenster)</div>
+                    <div class="bom-table-wrap" id="bom-openings-table-wrap"></div>
+                    <div class="bom-section-title" style="margin-top: 18px;">Elektro- & Leitungsanschlüsse</div>
+                    <div class="bom-table-wrap" id="bom-installations-table-wrap"></div>
+                </div>
+
+                <!-- Tab 4: Furniture Items -->
+                <div class="bom-panel" id="bom-tab-furniture">
+                    <div class="bom-section-title">Möbel- und Ausstattungspositionen</div>
+                    <div class="bom-table-wrap" id="bom-furniture-table-wrap"></div>
+                </div>
+            </div>
+
+            <!-- Footer Actions -->
+            <div class="bom-modal-footer">
+                <div class="bom-footer-status" id="bom-footer-status">0 Positionen</div>
+                <div class="bom-footer-actions">
+                    <button class="btn btn-secondary btn-sm" id="btn-bom-copy">
+                        <i data-lucide="copy"></i> In Zwischenablage
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-bom-print">
+                        <i data-lucide="printer"></i> Drucken / PDF
+                    </button>
+                    <button class="btn btn-secondary btn-sm" id="btn-bom-download-json">
+                        <i data-lucide="file-code"></i> JSON
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="btn-bom-download-csv">
+                        <i data-lucide="file-spreadsheet"></i> CSV herunterladen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </dialog>
 
     <!-- Scripts -->
     <script src="app.js?v=1.1.3"></script>

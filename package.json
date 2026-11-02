@@ -4,8 +4,14 @@
   "description": "Premium 2D/3D Room Planner",
   "main": "index.html",
   "scripts": {
-    "dev": "npx -y http-server -p 3000 -c-1"
+    "dev": "npx -y http-server -p 3000 -c-1",
+    "test": "node tests/run_all.js",
+    "test:unit": "node --test tests/unit/math_physics.test.js tests/unit/boundary_clamping.test.js",
+    "test:integration": "node --test tests/integration/state_workflow.test.js tests/integration/room_resize.test.js",
+    "test:e2e": "node --test tests/e2e/tier1_features.test.js tests/e2e/tier2_boundaries.test.js tests/e2e/tier3_combinations.test.js tests/e2e/tier4_scenarios.test.js",
+    "test:visual": "node tests/visual_tour.js"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
 }
